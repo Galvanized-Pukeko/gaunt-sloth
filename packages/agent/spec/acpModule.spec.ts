@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GthConfig } from '#src/config.js';
 
-// startServer (deepagents-acp) — capture the options it is called with.
+// startGthAcpServer (our deepagents-acp wrapper) — capture the options it is called with.
 const startServerMock = vi.fn();
-vi.mock('deepagents-acp', () => ({
-  startServer: startServerMock,
+vi.mock('#src/core/gthAcpServer.js', () => ({
+  startGthAcpServer: startServerMock,
 }));
 
 // GthDeepAgent — capture ctor args and stub buildDeepAgentParams.
@@ -30,10 +30,10 @@ vi.mock('@gaunt-sloth/core/utils/llmUtils.js', () => ({
   readCodePrompt: readCodePromptMock,
 }));
 
-const getCurrentWorkDirMock = vi.fn();
+const getProcessCwdMock = vi.fn();
 const stderrWriteMock = vi.fn();
 vi.mock('@gaunt-sloth/core/utils/systemUtils.js', () => ({
-  getCurrentWorkDir: getCurrentWorkDirMock,
+  getProcessCwd: getProcessCwdMock,
   stderr: { write: stderrWriteMock },
 }));
 
@@ -59,7 +59,7 @@ describe('acpModule.startAcpServer', () => {
     buildDeepAgentParamsMock.mockResolvedValue(PARAMS);
     buildSystemMessagesMock.mockReturnValue([{ content: 'SYSTEM PROMPT' }]);
     readCodePromptMock.mockReturnValue('code-mode-prompt');
-    getCurrentWorkDirMock.mockReturnValue('/work/dir');
+    getProcessCwdMock.mockReturnValue('/work/dir');
     startServerMock.mockResolvedValue(undefined);
   });
 

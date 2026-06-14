@@ -17,11 +17,11 @@
 import type { GthConfig } from '@gaunt-sloth/core/config.js';
 import type { GthCommand, StatusUpdateCallback } from '@gaunt-sloth/core/core/types.js';
 import { StatusLevel } from '@gaunt-sloth/core/core/types.js';
-import { getCurrentWorkDir, stderr } from '@gaunt-sloth/core/utils/systemUtils.js';
+import { getProcessCwd, stderr } from '@gaunt-sloth/core/utils/systemUtils.js';
 import { buildSystemMessages, readCodePrompt } from '@gaunt-sloth/core/utils/llmUtils.js';
 import { debugLog } from '@gaunt-sloth/core/utils/debugUtils.js';
-import { startServer } from 'deepagents-acp';
 import { GthDeepAgent } from '#src/core/GthDeepAgent.js';
+import { startGthAcpServer } from '#src/core/gthAcpServer.js';
 import { createResolvers } from '#src/resolvers.js';
 
 export interface StartAcpServerOptions {
@@ -68,9 +68,13 @@ export async function startAcpServer(
   const systemPrompt =
     typeof systemMessages[0]?.content === 'string' ? systemMessages[0].content : undefined;
 
-  debugLog(`Starting ACP server (command: ${command}, workspace: ${getCurrentWorkDir()})`);
+  // workspaceRoot is only the startup default: startGthAcpServer re-roots the filesystem backend
+  // to each ACP session's `cwd` (the IDE's project root). Use the raw process cwd, not
+  // getCurrentWorkDir() — its INIT_CWD preference leaks stale paths into this long-lived subprocess.
+  const workspaceRoot = getProcessCwd();
+  debugLog(`Starting ACP server (command: ${command}, startup workspace: ${workspaceRoot})`);
 
-  await startServer({
+  await startGthAcpServer({
     agents: {
       name: options.name ?? 'gaunt-sloth',
       description: options.description ?? 'Gaunt Sloth deep coding agent',
@@ -82,6 +86,6 @@ export async function startAcpServer(
       // Forward-compat: ignored by deepagents-acp 0.1.12 (the host gates fs interactively).
       permissions: params.permissions,
     },
-    workspaceRoot: getCurrentWorkDir(),
+    workspaceRoot,
   });
 }
