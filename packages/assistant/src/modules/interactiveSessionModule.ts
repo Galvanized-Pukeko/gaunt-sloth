@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/api/modules/interactiveSessionModule.js';
+export * from '@gaunt-sloth/agent/modules/interactiveSessionModule.js';

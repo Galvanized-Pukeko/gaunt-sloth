@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/tools/middleware/binaryContentInjectionMiddleware.js';
+export * from '@gaunt-sloth/agent/middleware/binaryContentInjectionMiddleware.js';

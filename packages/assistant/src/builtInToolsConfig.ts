@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/tools/builtInToolsConfig.js';
+export * from '@gaunt-sloth/agent/builtInToolsConfig.js';

@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/api/tools/A2AAgentTool.js';
+export * from '@gaunt-sloth/agent/tools/A2AAgentTool.js';

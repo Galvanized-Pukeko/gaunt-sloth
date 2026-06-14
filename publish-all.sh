@@ -15,8 +15,10 @@ REGISTRY="${REGISTRY:-http://localhost:4873}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Topological order: tools → core (depends on tools? no, but bundled together) → api → review.
-# core is published first since api/review/tools all depend on it.
-ORDER=(core tools api review)
+# core is published first since everything depends on it, then agent (the merged
+# tools+api runtime), then the deprecated tools/api forwarding shims (which depend
+# on agent), then review.
+ORDER=(core agent tools api review)
 
 echo "Publishing @gaunt-sloth/* to ${REGISTRY}"
 for pkg in "${ORDER[@]}"; do

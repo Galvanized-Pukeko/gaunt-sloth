@@ -14,7 +14,7 @@ vi.mock('node:crypto', async () => {
 const resolversMock = {
   createResolvers: vi.fn(),
 };
-vi.mock('@gaunt-sloth/api/resolvers.js', () => resolversMock);
+vi.mock('@gaunt-sloth/agent/resolvers.js', () => resolversMock);
 
 const askQuestion = vi.fn();
 const prompt = {

@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/api/tools/showA2UISurfaceTool.js';
+export * from '@gaunt-sloth/agent/tools/showA2UISurfaceTool.js';

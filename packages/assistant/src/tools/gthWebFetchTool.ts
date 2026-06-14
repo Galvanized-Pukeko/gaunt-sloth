@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/tools/tools/gthWebFetchTool.js';
+export * from '@gaunt-sloth/agent/tools/gthWebFetchTool.js';

@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import {
   createInteractiveSession,
   SessionConfig,
-} from '@gaunt-sloth/api/modules/interactiveSessionModule.js';
+} from '@gaunt-sloth/agent/modules/interactiveSessionModule.js';
 import { CommandLineConfigOverrides } from '@gaunt-sloth/core/config.js';
 import { readChatPrompt } from '@gaunt-sloth/core/utils/llmUtils.js';
 

@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const SCOPE = '@gaunt-sloth';
-const SYNCED = ['core', 'tools', 'api', 'review'];
+const SYNCED = ['core', 'agent', 'tools', 'api', 'review'];
 
 const args = process.argv.slice(2);
 const commit = args.includes('--commit');

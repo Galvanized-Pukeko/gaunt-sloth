@@ -1,7 +1,7 @@
 {
   "name": "@gaunt-sloth/tools",
   "version": "0.1.8",
-  "description": "Tools and middleware for Gaunt Sloth",
+  "description": "DEPRECATED: merged into @gaunt-sloth/agent. This package now re-exports from @gaunt-sloth/agent.",
   "license": "MIT",
   "author": "Andrew Kondratev",
   "repository": {
@@ -34,9 +34,8 @@
     "#src/*.js": "./dist/*.js"
   },
   "dependencies": {
-    "@gaunt-sloth/core": "0.1.8",
-    "diff": "^9.0.0",
-    "langchain": "^1.4.4"
+    "@gaunt-sloth/agent": "0.1.8",
+    "@gaunt-sloth/core": "0.1.8"
   },
   "files": [
     "./dist/*"

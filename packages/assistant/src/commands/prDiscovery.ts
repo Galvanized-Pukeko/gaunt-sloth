@@ -13,7 +13,7 @@ import { type BaseToolkit, StructuredToolInterface, tool } from '@langchain/core
 import { z } from 'zod';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createResolvers } from '@gaunt-sloth/api/resolvers.js';
+import { createResolvers } from '@gaunt-sloth/agent/resolvers.js';
 import { get as getGhPrDiff } from '@gaunt-sloth/review/sources/ghPrDiffSource.js';
 import { get as getGhPrView } from '@gaunt-sloth/review/sources/ghPrViewSource.js';
 import { get as getGhIssue } from '@gaunt-sloth/review/sources/ghIssueSource.js';

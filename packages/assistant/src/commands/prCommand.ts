@@ -156,7 +156,7 @@ export function prCommand(
       }
 
       const { review } = await import('@gaunt-sloth/review/modules/reviewModule.js');
-      const { createResolvers } = await import('@gaunt-sloth/api/resolvers.js');
+      const { createResolvers } = await import('@gaunt-sloth/agent/resolvers.js');
       // TODO consider including requirements id
       // TODO sanitize prId
       await review(

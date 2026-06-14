@@ -35,7 +35,7 @@ vi.mock('@gaunt-sloth/core/utils/debugUtils.js', () => ({
   debugLog: debugLogMock,
 }));
 
-vi.mock('@gaunt-sloth/api/resolvers.js', () => ({
+vi.mock('@gaunt-sloth/agent/resolvers.js', () => ({
   createResolvers: vi.fn(() => ({})),
 }));
 

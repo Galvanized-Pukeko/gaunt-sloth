@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/tools/middleware/types.js';
+export * from '@gaunt-sloth/agent/middleware/types.js';

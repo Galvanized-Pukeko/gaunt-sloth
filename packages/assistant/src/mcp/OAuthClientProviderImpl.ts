@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/api/mcp/OAuthClientProviderImpl.js';
+export * from '@gaunt-sloth/agent/mcp/OAuthClientProviderImpl.js';

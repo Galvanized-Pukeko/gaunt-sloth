@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/api/modules/apiAgUiModule.js';
+export * from '@gaunt-sloth/agent/modules/apiAgUiModule.js';

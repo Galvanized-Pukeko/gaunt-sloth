@@ -1,1 +1,1 @@
-export * from '@gaunt-sloth/api/utils/mcpUtils.js';
+export * from '@gaunt-sloth/agent/utils/mcpUtils.js';

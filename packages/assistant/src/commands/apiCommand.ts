@@ -20,7 +20,7 @@ export function apiCommand(
           ? parseInt(options.port, 10)
           : (config.commands?.api?.port ?? 3000);
 
-        const { startAgUiServer } = await import('@gaunt-sloth/api/modules/apiAgUiModule.js');
+        const { startAgUiServer } = await import('@gaunt-sloth/agent/modules/apiAgUiModule.js');
         await startAgUiServer(config, port);
       } catch (error) {
         displayError(error instanceof Error ? error.message : String(error));

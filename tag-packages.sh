@@ -17,7 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Synced packages only — same set as bump.mjs / publish-all.sh, minus assistant.
-PACKAGES=(core tools api review)
+PACKAGES=(core agent tools api review)
 
 PUSH="${PUSH:-0}"
 [[ "${1:-}" == "--push" ]] && PUSH=1

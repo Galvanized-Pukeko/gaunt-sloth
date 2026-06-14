@@ -93,6 +93,7 @@ export default defineConfig([
   },
   // Workspace package TypeScript files
   pkgSourceConfig('core'),
+  pkgSourceConfig('agent'),
   pkgSourceConfig('tools'),
   pkgSourceConfig('api'),
   pkgSourceConfig('review'),
