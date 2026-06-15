@@ -67,25 +67,6 @@ export function createResolvers(): AgentResolvers {
     debugLog(`A2A tools loaded: ${a2aTools.length}`);
     tools.push(...a2aTools);
 
-    // 4. Add API-specific built-in tools if configured
-    const apiBuiltInTools: Record<string, string> = {
-      show_a2ui_surface: '#src/tools/showA2UISurfaceTool.js',
-    };
-
-    if (config.builtInTools) {
-      for (const toolName of config.builtInTools) {
-        if (toolName in apiBuiltInTools) {
-          try {
-            const toolModule = await import(apiBuiltInTools[toolName]);
-            tools.push(toolModule.get(config));
-            debugLog(`${toolName} tool loaded`);
-          } catch (error) {
-            debugLog(`Failed to load ${toolName} tool: ${error}`);
-          }
-        }
-      }
-    }
-
     return tools;
   };
 

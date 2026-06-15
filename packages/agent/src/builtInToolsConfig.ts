@@ -25,6 +25,10 @@ export const AVAILABLE_BUILT_IN_TOOLS = {
    * Web fetch tool.
    */
   gth_web_fetch: '#src/tools/gthWebFetchTool.js',
+  /**
+   * AG-UI A2UI surface tool: lets the agent render an A2UI surface in the web client.
+   */
+  show_a2ui_surface: '#src/tools/showA2UISurfaceTool.js',
 } as const;
 
 /**

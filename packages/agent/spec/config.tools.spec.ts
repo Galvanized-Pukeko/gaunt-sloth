@@ -1,6 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultTools } from '#src/builtInToolsConfig.js';
 import type { GthConfig } from '#src/config.js';
+
+const consoleUtilsMock = vi.hoisted(() => ({
+  display: vi.fn(),
+  displayError: vi.fn(),
+  displayInfo: vi.fn(),
+  displayWarning: vi.fn(),
+  displaySuccess: vi.fn(),
+  displayDebug: vi.fn(),
+}));
+vi.mock('@gaunt-sloth/core/utils/consoleUtils.js', () => consoleUtilsMock);
 
 // Mock the GthFileSystemToolkit
 vi.mock('#src/tools/GthFileSystemToolkit.js', () => ({
@@ -28,6 +38,10 @@ vi.mock('#src/utils/systemUtils.js', () => ({
 }));
 
 describe('Config Tool Functions', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
   describe('getDefaultTools', () => {
     it('should return all tools when filesystem is "all"', async () => {
       const result = await getDefaultTools({
@@ -92,6 +106,29 @@ describe('Config Tool Functions', () => {
         'list_directory',
         'gth_status_update',
       ]);
+    });
+
+    // Regression: show_a2ui_surface used to live in a second registry (resolvers.ts step 4),
+    // so getBuiltInTools emitted a spurious "Unknown built-in tool" warning for it before
+    // the tool was loaded elsewhere. It now resolves from the single AVAILABLE_BUILT_IN_TOOLS.
+    it('should load show_a2ui_surface from the unified registry without warning', async () => {
+      const result = await getDefaultTools({
+        filesystem: 'none',
+        builtInTools: ['show_a2ui_surface'],
+      } as Partial<GthConfig> as GthConfig);
+      expect(result.map((t) => t.name)).toEqual(['show_a2ui_surface']);
+      expect(consoleUtilsMock.displayWarning).not.toHaveBeenCalled();
+    });
+
+    it('should still warn only for genuinely unknown built-in tools', async () => {
+      const result = await getDefaultTools({
+        filesystem: 'none',
+        builtInTools: ['does_not_exist'],
+      } as Partial<GthConfig> as GthConfig);
+      expect(result).toEqual([]);
+      expect(consoleUtilsMock.displayWarning).toHaveBeenCalledWith(
+        'Unknown built-in tool: does_not_exist'
+      );
     });
   });
 });
