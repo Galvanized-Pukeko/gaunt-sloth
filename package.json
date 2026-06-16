@@ -25,6 +25,7 @@
     "test": "npm run build && vitest run",
     "it": "npm run build && node it.js",
     "it-verbose": "npm run build && GSLOTH_IT_VERBOSE=1 node it.js",
+    "it-tui": "npm run build && node packages/assistant/run-tui-e2e.js",
     "lint": "eslint . --ext .js,.ts",
     "lint-n-fix": "eslint . --ext .js,.ts --fix",
     "format": "prettier --write 'packages/*/src/**/*.{js,ts}'",

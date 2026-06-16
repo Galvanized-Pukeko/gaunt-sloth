@@ -31,3 +31,6 @@ out/*
 briefs/*
 req
 readonly
+
+# tui-test (Stage D PTY e2e) transpiled cache
+packages/*/tui-e2e/.tui-test/

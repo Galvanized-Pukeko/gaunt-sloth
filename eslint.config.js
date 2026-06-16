@@ -56,6 +56,7 @@ const globalIgnores = [
   '**/dist/**',
   'packages/assistant/integration-tests/workdir',
   'packages/assistant/integration-tests/workdir-with-profiles',
+  'packages/*/tui-e2e/.tui-test/**',
   'docs-generated/**',
   'readonly/**',
   'coverage/**',
@@ -101,6 +102,7 @@ export default defineConfig([
     files: [
       'packages/*/spec/**/*.ts',
       'packages/*/integration-tests/**/*.ts',
+      'packages/*/tui-e2e/**/*.ts',
       'vitest.config.ts',
       'vitest-it.config.ts',
     ],

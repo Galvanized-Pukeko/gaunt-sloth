@@ -9,6 +9,7 @@ import {
   stopSessionLogging,
 } from '@gaunt-sloth/core/utils/consoleUtils.js';
 import { appendToFile, getCommandOutputFilePath } from '@gaunt-sloth/core/utils/fileUtils.js';
+import { env } from '@gaunt-sloth/core/utils/systemUtils.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { createResolvers } from '@gaunt-sloth/agent/resolvers.js';
@@ -52,6 +53,25 @@ export async function createTuiSession(
   commandLineConfigOverrides: CommandLineConfigOverrides,
   message?: string
 ): Promise<void> {
+  // Hermetic e2e seam: when GTH_TUI_E2E_FIXTURE is set, drive the real <App> (Ink renderer +
+  // foldEvents) from a deterministic, key-free replay of recorded events instead of a model.
+  // Production never takes this branch (the env var is set only by the PTY e2e harness).
+  const fixturePath = env.GTH_TUI_E2E_FIXTURE;
+  if (fixturePath) {
+    const { createFixtureTuiAgent } = await import('#src/tui/fixtureAgent.js');
+    const instance = render(
+      <App
+        agent={createFixtureTuiAgent(fixturePath)}
+        mode={sessionConfig.mode}
+        readyMessage={sessionConfig.readyMessage}
+        exitMessage={sessionConfig.exitMessage}
+        initialMessage={message}
+      />
+    );
+    await instance.waitUntilExit();
+    return;
+  }
+
   const config = { ...(await initConfig(commandLineConfigOverrides)) };
   const checkpointSaver = new MemorySaver();
   const logFileName = getCommandOutputFilePath(config, sessionConfig.mode);

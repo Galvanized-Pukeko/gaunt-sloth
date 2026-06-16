@@ -40,6 +40,10 @@ export async function runCommandWithArgs(
       cwd: testDir,
       env: {
         ...process.env,
+        // Belt-and-suspenders: ITs already spawn non-TTY (so the TUI auto-falls back to the
+        // readline path), but force it off explicitly so the interactive ITs can never select
+        // the Ink TUI regardless of how they are launched. Same assertions, readline path.
+        GTH_NO_TUI: '1',
       },
       shell: platform().includes('win') && !platform().includes('darwin'),
       // Explicitly ignore stdin, otherwise the app switches to pipe mode
@@ -97,6 +101,10 @@ export async function runCommandExpectingExitCode(
       cwd: testDir,
       env: {
         ...process.env,
+        // Belt-and-suspenders: ITs already spawn non-TTY (so the TUI auto-falls back to the
+        // readline path), but force it off explicitly so the interactive ITs can never select
+        // the Ink TUI regardless of how they are launched. Same assertions, readline path.
+        GTH_NO_TUI: '1',
       },
       shell: platform().includes('win') && !platform().includes('darwin'),
       stdio: ['ignore', 'pipe', 'pipe'],
