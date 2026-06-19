@@ -15,11 +15,14 @@ dock) — a structural change, not a tweak. Treat as its own node, not part of C
 Watch out for: scrollback behaviour, resize handling, and keeping the `<Static>`
 no-flicker guarantee.
 
-## Full-width rules
-`components/Rule.tsx` draws a fixed 40-char dim rule (single-sourced, used both
-between turns in `Transcript` and to bracket the input dock in `App`). Could match
-the live terminal width (`useStdout().stdout.columns`, clamped) so the rules span
-the window. Deferred because width must react to resize and stay cheap to re-render.
+## Full-width rules — done (TUI-C6)
+`components/Rule.tsx` now spans the live terminal width instead of a fixed 40 chars.
+It reads `useStdout().stdout.columns`, subscribes to the stdout `'resize'` event so the
+rule re-renders at the new width (listener torn down on unmount), and falls back to 80
+columns when the width is unknown (non-TTY/tests), clamped to a minimum of 1. The width
+math is the pure, exported `ruleWidth(columns)` helper (unit-tested in
+`spec/tui/Rule.spec.ts`); the component stays single-sourced and is still used both
+between turns in `Transcript` and to bracket the input dock in `App`.
 
 ## Other small ideas
 - Status bar could surface more context once available: provider/key source,
