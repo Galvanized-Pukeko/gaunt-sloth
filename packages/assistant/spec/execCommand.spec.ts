@@ -43,7 +43,7 @@ vi.mock('@gaunt-sloth/core/utils/llmUtils.js', async () => {
 const fileUtilsMock = {
   readMultipleFilesFromProjectDir: vi.fn(),
 };
-vi.mock('@gaunt-sloth/review/utils/fileUtils.js', () => fileUtilsMock);
+vi.mock('@gaunt-sloth/core/utils/fileUtils.js', () => fileUtilsMock);
 
 const systemUtilsMock = {
   getStringFromStdin: vi.fn().mockReturnValue(''),

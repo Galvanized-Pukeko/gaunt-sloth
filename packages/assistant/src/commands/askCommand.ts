@@ -4,7 +4,7 @@ import { getAskSystemPrompt } from '#src/commands/commandIntrospection.js';
 import { getStringFromStdin } from '@gaunt-sloth/core/utils/systemUtils.js';
 import { wrapContent } from '@gaunt-sloth/core/utils/llmUtils.js';
 
-import { readMultipleFilesFromProjectDir } from '@gaunt-sloth/review/utils/fileUtils.js';
+import { readMultipleFilesFromProjectDir } from '@gaunt-sloth/core/utils/fileUtils.js';
 
 interface AskCommandOptions {
   file?: string[];

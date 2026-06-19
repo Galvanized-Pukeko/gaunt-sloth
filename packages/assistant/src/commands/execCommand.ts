@@ -5,7 +5,7 @@ import { getExecSystemPrompt } from '#src/commands/commandIntrospection.js';
 import { getStringFromStdin, setExitCode } from '@gaunt-sloth/core/utils/systemUtils.js';
 import { displayError } from '@gaunt-sloth/core/utils/consoleUtils.js';
 import { wrapContent } from '@gaunt-sloth/core/utils/llmUtils.js';
-import { readMultipleFilesFromProjectDir } from '@gaunt-sloth/review/utils/fileUtils.js';
+import { readMultipleFilesFromProjectDir } from '@gaunt-sloth/core/utils/fileUtils.js';
 
 interface ExecCommandOptions {
   file?: string[];
