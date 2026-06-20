@@ -10,7 +10,7 @@ import type { DebugRequestExtras, DebugToolDef } from '@gaunt-sloth/agent/core/d
  */
 
 /**
- * Render "Sent to model (full history)": the real `request.messages` at call time. Uses
+ * Render "Sent to model (chat history)": the real `request.messages` at call time. Uses
  * LangChain's `mapChatMessagesToStoredMessages` so each message is a plain, JSON-stable record
  * (type + content + kwargs) rather than a class instance. Defensive: a non-serializable payload
  * degrades to a readable fallback instead of throwing inside the render path.
@@ -41,7 +41,7 @@ export function renderResponse(response: unknown): string {
 }
 
 /**
- * Render "Sent to model (request)": the non-message parts that also shape a turn — the
+ * Render "Sent to model (system + tools)": the non-message parts that also shape a turn — the
  * system prompt, the tool definitions, the tool-choice config and the scalar model params.
  * These come pre-filtered (key-free) from the capture site; this renderer only formats them
  * readably. Each part degrades to a note rather than throwing, so the `/debug` panel never

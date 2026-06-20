@@ -8,17 +8,17 @@ export type DebugTab = (typeof DEBUG_TABS)[number];
 
 const TAB_LABELS: Record<DebugTab, string> = {
   subagents: 'Subagents',
-  history: 'Sent to model (full history)',
-  request: 'Sent to model (request)',
+  history: 'Sent to model (chat history)',
+  request: 'Sent to model (system + tools)',
   response: 'Raw model response',
 };
 
 export interface DebugPanelProps {
   /** Subagent tree folded from `task` tool-call events. */
   subagents: SubagentTreeViewModel;
-  /** Rendered lines for "Sent to model (full history)" (already split on newlines). */
+  /** Rendered lines for "Sent to model (chat history)" (already split on newlines). */
   historyLines: string[];
-  /** Rendered lines for "Sent to model (request)" — tools/system/params (split on newlines). */
+  /** Rendered lines for "Sent to model (system + tools)" — system/tools/params (split on newlines). */
   requestLines: string[];
   /** Rendered lines for "Raw model response" (already split on newlines). */
   responseLines: string[];

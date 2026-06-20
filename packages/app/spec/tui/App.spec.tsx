@@ -299,7 +299,7 @@ describe('tui <App>', () => {
     unmount();
   });
 
-  it('shows the "Sent to model (request)" tab with captured request details', async () => {
+  it('shows the "Sent to model (system + tools)" tab with captured request details', async () => {
     const agent = scriptedAgent([{ type: 'text', delta: 'hi' }]);
     let emit: ((c: import('#src/tui/types.js').TuiDebugCapture) => void) | undefined;
     const subscribeDebug = (cb: (c: import('#src/tui/types.js').TuiDebugCapture) => void) => {
@@ -321,7 +321,7 @@ describe('tui <App>', () => {
     stdin.write('/debug');
     await vi.waitFor(() => expect(lastFrame()).toContain('/debug'));
     stdin.write('\r');
-    await vi.waitFor(() => expect(lastFrame()).toContain('Sent to model (request)'));
+    await vi.waitFor(() => expect(lastFrame()).toContain('Sent to model (system + tools)'));
 
     // Step to the request tab (subagents -> history -> request) and read its content.
     stdin.write(TAB); // focus
