@@ -2,7 +2,7 @@ name: Release
 
 # Consolidated, manually-dispatched release pipeline for ALL FOUR locked Gaunt
 # Sloth packages: @gaunt-sloth/{core,agent,review} and the fat CLI `gaunt-sloth`
-# (dir packages/assistant). Replaces both publish.yml and publish-packages.yml.
+# (dir packages/app). Replaces both publish.yml and publish-packages.yml.
 #
 # Triggered from the Actions "Run workflow" button (workflow_dispatch) — NOT
 # `release: published`, because that would create the GitHub Release object

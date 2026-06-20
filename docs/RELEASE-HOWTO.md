@@ -18,7 +18,7 @@ the `files` makes .npmignore ignored.
 As of v2 **all four packages release in lockstep at one version**:
 
 - `@gaunt-sloth/core`, `@gaunt-sloth/agent`, `@gaunt-sloth/review` (the scoped libraries), and
-- `gaunt-sloth` — the fat user-facing CLI (dir `packages/assistant`; the package **name** is
+- `gaunt-sloth` — the fat user-facing CLI (dir `packages/app`; the package **name** is
   `gaunt-sloth`, not `@gaunt-sloth/assistant`). The former `@gaunt-sloth/tools` and
   `@gaunt-sloth/api` were merged into `@gaunt-sloth/agent` in the 2.0 break.
 

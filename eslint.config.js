@@ -54,8 +54,8 @@ function pkgSourceConfig(pkg) {
 const globalIgnores = [
   '**/node_modules/**',
   '**/dist/**',
-  'packages/assistant/integration-tests/workdir',
-  'packages/assistant/integration-tests/workdir-with-profiles',
+  'packages/app/integration-tests/workdir',
+  'packages/app/integration-tests/workdir-with-profiles',
   'packages/*/tui-e2e/.tui-test/**',
   'docs-generated/**',
   'readonly/**',
@@ -96,7 +96,7 @@ export default defineConfig([
   pkgSourceConfig('core'),
   pkgSourceConfig('agent'),
   pkgSourceConfig('review'),
-  pkgSourceConfig('assistant'),
+  pkgSourceConfig('app'),
   // Test TypeScript files with separate project reference
   {
     files: [

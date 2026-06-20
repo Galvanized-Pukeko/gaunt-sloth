@@ -4,7 +4,7 @@ import { extractReviewScore } from './support/reviewScoreExtractor.ts';
 import fs from 'fs';
 import path from 'path';
 
-const WORKDIR = path.resolve('./packages/assistant/integration-tests/workdir');
+const WORKDIR = path.resolve('./packages/app/integration-tests/workdir');
 
 describe('PR Command Integration Tests', () => {
   // Test for PR review with approval

@@ -355,7 +355,7 @@ which expects full interface. Even better option is to provide all properties.
 
 All FOUR packages are version-locked and released together — the scoped set
 `@gaunt-sloth/{core,agent,review}` plus the fat `gaunt-sloth` CLI (dir
-`packages/assistant`). `packages/core/package.json` is the version source of
+`packages/app`). `packages/core/package.json` is the version source of
 truth and the others are kept in lockstep (the old separate `tools`/`api`
 packages were merged into `agent` long ago; the assistant is no longer excluded
 or published on its own).

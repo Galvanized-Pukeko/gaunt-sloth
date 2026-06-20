@@ -9,7 +9,7 @@ updates:
     directories:
       - '/'
       - '/packages/api'
-      - '/packages/assistant'
+      - '/packages/app'
       - '/packages/core'
       - '/packages/review'
       - '/packages/tools'

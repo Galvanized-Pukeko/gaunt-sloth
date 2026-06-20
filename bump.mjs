@@ -9,12 +9,12 @@
 //
 // LOCKED packages — all four carry the SAME version and pin each other exactly:
 //   @gaunt-sloth/core, @gaunt-sloth/agent, @gaunt-sloth/review  (dirs: core/agent/review)
-//   gaunt-sloth                                                  (dir:  assistant)
+//   gaunt-sloth                                                  (dir:  app)
 // packages/core/package.json is the source of truth for the version.
 //
-// The fat CLI's package NAME is `gaunt-sloth` (not @gaunt-sloth/assistant), so it
+// The fat CLI's package NAME is `gaunt-sloth` (not @gaunt-sloth/app), so it
 // is version-synced and has its @gaunt-sloth/* dep pins rewritten, but nothing
-// cross-pins a (nonexistent) `@gaunt-sloth/assistant`.
+// cross-pins a (nonexistent) `@gaunt-sloth/app`.
 //
 // publishConfig.tag (the `latest`-hijack guard) is written into all four
 // package.jsons, derived from the new version: a prerelease (e.g. 2.0.0-alpha.0)
@@ -32,10 +32,10 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const SCOPE = '@gaunt-sloth';
 // Synced library packages (scoped). They cross-pin each other exactly.
 const SYNCED = ['core', 'agent', 'review'];
-// The fat CLI: dir `assistant`, but its package name is `gaunt-sloth`.
-const ASSISTANT_DIR = 'assistant';
+// The fat CLI: dir `app`, but its package name is `gaunt-sloth`.
+const APP_DIR = 'app';
 // Every package that carries the locked version + publishConfig.tag.
-const ALL_DIRS = [...SYNCED, ASSISTANT_DIR];
+const ALL_DIRS = [...SYNCED, APP_DIR];
 
 const RELEASE_TYPES = [
   'patch',
@@ -141,15 +141,15 @@ for (const name of SYNCED) {
 }
 
 // The fat CLI (gaunt-sloth) is now version-locked too.
-const assistantPath = `packages/${ASSISTANT_DIR}/package.json`;
-const assistant = readPkg(assistantPath);
-const assistantBefore = assistant.version;
-assistant.version = target;
-rewriteSyncedDeps(assistant.dependencies);
-rewriteSyncedDeps(assistant.peerDependencies);
-setPublishTag(assistant);
-writePkg(assistantPath, assistant);
-console.log(`  ${'gaunt-sloth'.padEnd(9)} ${assistantBefore} → ${target}  (tag ${distTag})`);
+const appPath = `packages/${APP_DIR}/package.json`;
+const app = readPkg(appPath);
+const appBefore = app.version;
+app.version = target;
+rewriteSyncedDeps(app.dependencies);
+rewriteSyncedDeps(app.peerDependencies);
+setPublishTag(app);
+writePkg(appPath, app);
+console.log(`  ${'gaunt-sloth'.padEnd(9)} ${appBefore} → ${target}  (tag ${distTag})`);
 
 if (commit) {
   // package-lock.json records the workspace versions, so refresh it or the

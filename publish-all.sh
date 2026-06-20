@@ -16,9 +16,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Topological order, by package DIRECTORY: core first (everything depends on it),
 # then agent (the merged tools+api runtime; depends on core) and review (depends
-# on core), then the fat CLI `gaunt-sloth` (dir: assistant) LAST — it depends on
+# on core), then the fat CLI `gaunt-sloth` (dir: app) LAST — it depends on
 # all three. The former tools/api forwarding shims were removed in the 2.0 break.
-ORDER=(core agent review assistant)
+ORDER=(core agent review app)
 
 echo "Publishing Gaunt Sloth packages to ${REGISTRY}"
 for dir in "${ORDER[@]}"; do

@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { runCommandExpectingExitCode, runCommandWithArgs } from './support/commandRunner.ts';
 import path from 'node:path';
 
-const PROFILES_WORKDIR = path.resolve(
-  './packages/assistant/integration-tests/workdir-with-profiles'
-);
+const PROFILES_WORKDIR = path.resolve('./packages/app/integration-tests/workdir-with-profiles');
 
 describe('Review Command Integration Tests', () => {
   it('should work with default profile', async () => {

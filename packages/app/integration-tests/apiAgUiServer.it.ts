@@ -8,7 +8,7 @@ const HEALTH_URL = `http://localhost:${SERVER_PORT}/health`;
 const RUN_URL = `http://localhost:${SERVER_PORT}/agents/default/run`;
 const READY_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 500;
-const WORKDIR = path.resolve('./packages/assistant/integration-tests/workdir');
+const WORKDIR = path.resolve('./packages/app/integration-tests/workdir');
 
 async function waitForHealth(proc: ChildProcess, timeoutMs = READY_TIMEOUT_MS): Promise<void> {
   let stdout = '';
