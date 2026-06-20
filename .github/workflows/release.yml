@@ -179,7 +179,9 @@ jobs:
     name: Ship current version, then post-bump main to next (all four)
     needs: integration-tests-platforms
     runs-on: ubuntu-latest
-    environment: integration tests
+    # Must match the Environment name in npm's Trusted Publisher config (OIDC
+    # only mints a token for a job running in this exact environment).
+    environment: release
     permissions:
       contents: write # push the <pkg>@<version> git tags + the post-bump commit
       id-token: write # npm Trusted Publishing (OIDC) + provenance
