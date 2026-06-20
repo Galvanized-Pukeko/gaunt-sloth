@@ -11,10 +11,21 @@ name: Release
 #
 #   lint+unit  ->  integration-tests (big provider)
 #              ->  integration-tests-platforms (mac + win)
-#              ->  release   (bump + tag + GitHub Release + publish all four)
+#              ->  release   (ship CURRENT version, THEN post-bump to next)
+#
+# RELEASE-VERSIONING MODEL B — "release CURRENT, then post-bump to next".
+# Invariant: `main` HEAD always carries the *next* version to publish. A run
+# ships whatever version is currently in package.json, and ONLY AFTER a
+# successful publish does it bump to the next version and commit/push. This makes
+# the run idempotent at the version level: if publish fails, the version is
+# unchanged and a re-dispatch retries the SAME version; if it succeeds, the
+# version has moved so it can't be re-shipped.
+#
+# The dispatch inputs therefore describe the POST-bump (the increment applied
+# AFTER this release), NOT the version being shipped.
 #
 # Publishing uses npm Trusted Publishing (OIDC) — no NPM_TOKEN, just
-# `id-token: write`. The npm dist-tag is DERIVED from the resulting version
+# `id-token: write`. The npm dist-tag is DERIVED from the CURRENT version
 # (prerelease -> alpha/beta/rc, else latest); publishConfig.tag (written by
 # bump.mjs) is belt-and-suspenders for the same guarantee.
 
@@ -22,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Semver verb (use "explicit" to type an exact version below)'
+        description: 'POST-bump verb applied to main AFTER this release (sets the NEXT version to publish). Not the version shipped now.'
         type: choice
         required: true
         default: prerelease
@@ -36,7 +47,7 @@ on:
           - prerelease
           - explicit
       preid:
-        description: 'Prerelease channel — only used by the pre*/prerelease verbs'
+        description: 'Prerelease channel for the POST-bump — only used by the pre*/prerelease verbs'
         type: choice
         required: false
         default: alpha
@@ -45,7 +56,7 @@ on:
           - beta
           - rc
       explicit_version:
-        description: 'Exact version (e.g. 2.0.0-alpha.0) — only used when bump = explicit'
+        description: 'Exact NEXT version (e.g. 2.0.0-alpha.0) for the POST-bump — only used when bump = explicit'
         type: string
         required: false
         default: ''
@@ -132,12 +143,12 @@ jobs:
           OPEN_ROUTER_API_KEY: ${{ secrets.OPEN_ROUTER_API_KEY }}
 
   release:
-    name: Bump, tag, GitHub Release and publish (all four)
+    name: Ship current version, then post-bump main to next (all four)
     needs: integration-tests-platforms
     runs-on: ubuntu-latest
     environment: integration tests
     permissions:
-      contents: write # commit the version bump + push the <pkg>@<version> git tags
+      contents: write # push the <pkg>@<version> git tags + the post-bump commit
       id-token: write # npm Trusted Publishing (OIDC) + provenance
     steps:
       - uses: actions/checkout@v6
@@ -159,8 +170,51 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      - name: Bump and commit version (drives bump.mjs from dispatch inputs)
-        id: bump
+      - name: Read CURRENT version to ship (and derive its dist-tag)
+        id: current
+        run: |
+          set -euo pipefail
+          # main HEAD always carries the next-to-publish version — that's what we ship.
+          VERSION="$(node -p "require('./packages/core/package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Derive npm dist-tag from the CURRENT version (same rule as bump.mjs):
+          # prerelease -> its preid (alpha/beta/rc); stable -> latest.
+          DIST_TAG="$(node -p "const s=require('semver');const v=require('./packages/core/package.json').version;const p=s.prerelease(v);p?(p.find(x=>typeof x==='string')||'latest'):'latest'")"
+          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$(node -p "require('semver').prerelease('$VERSION')?1:''")" ]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Shipping version=$VERSION dist_tag=$DIST_TAG"
+      - name: Build
+        run: npm run build
+      - name: Tag packages (all four) at current version and push
+        # tag-packages.sh skips already-existing tags, so a re-dispatch of the
+        # same version is safe here.
+        run: ./tag-packages.sh --push
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.current.outputs.version }}
+          IS_PRERELEASE: ${{ steps.current.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          PRE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRE_FLAG="--prerelease"
+          fi
+          gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes $PRE_FLAG
+      - name: Publish all four to npmjs (current version)
+        env:
+          REGISTRY: https://registry.npmjs.org
+          # Explicit --tag (belt-and-suspenders alongside each package's
+          # publishConfig.tag) so a prerelease never lands on `latest`.
+          NPM_PUBLISH_ARGS: --access public --provenance --tag ${{ steps.current.outputs.dist_tag }}
+        run: npm run release:publish
+      # ----- Only after a successful publish: move main to the NEXT version -----
+      - name: Post-bump main to the next version (drives bump.mjs from dispatch inputs)
+        id: postbump
         env:
           BUMP: ${{ inputs.bump }}
           PREID: ${{ inputs.preid }}
@@ -176,39 +230,8 @@ jobs:
           else
             npm run release:bump-and-commit -- "$BUMP" "$PREID"
           fi
-          VERSION="$(node -p "require('./packages/core/package.json').version")"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # Derive npm dist-tag from the resulting version (same rule as bump.mjs).
-          DIST_TAG="$(node -p "const s=require('semver');const v=require('./packages/core/package.json').version;const p=s.prerelease(v);p?(p.find(x=>typeof x==='string')||'latest'):'latest'")"
-          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
-          if [ -n "$(node -p "require('semver').prerelease('$VERSION')?1:''")" ]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Computed version=$VERSION dist_tag=$DIST_TAG"
-      - name: Build
-        run: npm run build
-      - name: Push version commit
+          NEXT="$(node -p "require('./packages/core/package.json').version")"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "main now carries next version=$NEXT"
+      - name: Push post-bump commit to main
         run: git push origin HEAD:main
-      - name: Tag packages (all four) and push
-        run: ./tag-packages.sh --push
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.bump.outputs.version }}
-          IS_PRERELEASE: ${{ steps.bump.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-          PRE_FLAG=""
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            PRE_FLAG="--prerelease"
-          fi
-          gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes $PRE_FLAG
-      - name: Publish all four to npmjs
-        env:
-          REGISTRY: https://registry.npmjs.org
-          # Explicit --tag (belt-and-suspenders alongside each package's
-          # publishConfig.tag) so a prerelease never lands on `latest`.
-          NPM_PUBLISH_ARGS: --access public --provenance --tag ${{ steps.bump.outputs.dist_tag }}
-        run: npm run release:publish

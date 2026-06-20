@@ -68,34 +68,102 @@ only after every gate is green. Job graph:
 ```
 lint+unit  ->  integration-tests (big provider)
            ->  integration-tests-platforms (macOS + Windows)
-           ->  release   (bump + build + push + tag + GitHub Release + publish all four)
+           ->  release   (ship CURRENT version, THEN post-bump main to next)
 ```
 
-The "Run workflow" form has three inputs:
+#### Versioning model: "release CURRENT, then post-bump to next"
 
-- **`bump`** — the semver verb: `patch | minor | major | prepatch | preminor | premajor |
-  prerelease | explicit`.
-- **`preid`** — `alpha | beta | rc`; only used by the `pre*`/`prerelease` verbs.
-- **`explicit_version`** — an exact version (e.g. `2.0.0-alpha.0`); only used when `bump = explicit`.
+**The invariant: `main` HEAD always carries the *next* version to publish.** A release run ships
+whatever version is currently in `package.json`, and **only after a successful publish** does it
+bump to the next version, commit, and push that commit to `main`.
 
-The full lifecycle from those inputs:
+This makes a run **idempotent at the version level**:
 
-| want | from | inputs | result | dist-tag |
+- If the publish step fails, the version in `main` is **unchanged** — re-dispatching the workflow
+  simply **retries the same version**.
+- If the publish succeeds, the version has **moved on** — so the just-shipped version can never be
+  re-shipped by a later run.
+
+Step order inside the `release` job:
+
+1. Checkout `main` (`fetch-depth: 0`), setup Node, `npm ci`, configure git identity.
+2. **Read the CURRENT version** from `packages/core/package.json` — this is what ships.
+3. **Derive the dist-tag** from the *current* version (prerelease suffix → its preid; else `latest`).
+4. `npm run build`.
+5. `./tag-packages.sh --push` — tags the current version (skips already-existing tags, so a
+   re-dispatch of the same version is safe).
+6. `gh release create v<current>` (`--prerelease` when the current version has a prerelease suffix).
+7. **Publish all four** at the current version with `--tag <derived>`.
+8. **Only after publish succeeds:** post-bump — `npm run release:bump-and-commit` driven by the
+   dispatch inputs, then `git push origin HEAD:main`.
+
+#### The dispatch inputs describe the POST-bump, not the version shipped
+
+The "Run workflow" form has three inputs. They control the **next** version (the increment applied
+*after* this release), **not** the version being released now:
+
+- **`bump`** — the semver verb applied as the post-bump: `patch | minor | major | prepatch |
+  preminor | premajor | prerelease | explicit`. **Default `prerelease`.**
+- **`preid`** — `alpha | beta | rc`; only used by the `pre*`/`prerelease` verbs. Default `alpha`.
+- **`explicit_version`** — an exact NEXT version (e.g. `2.0.0-alpha.0`); only used when
+  `bump = explicit`.
+
+#### One-time seed (before the very first release)
+
+Because a run ships the *current* version, `main` must already carry a version to ship. Seed it
+**once**, locally, before the first dispatch:
+
+```bash
+npm run release:bump-and-commit -- 2.0.0-alpha.0   # then push main
+```
+
+`premajor` from `0.1.8` would yield `1.0.0-alpha.0`, not `2.0.0` — we're skipping a whole major
+(0→2) as a one-time unification jump, so the seed is set explicitly. After this seed, the first
+dispatch ships `2.0.0-alpha.0` and post-bumps `main` to whatever the inputs say.
+
+#### The lifecycle from one dropdown
+
+With the seed in place, each dispatch ships the version on `main` and leaves the *next* version
+there. The "from" column is what `main` carries when you press the button (= what ships); "leaves
+on main" is the post-bump result that the **next** run will ship.
+
+| run | from (ships now) | dist-tag | post-bump inputs | leaves on main (ships next) |
 | --- | --- | --- | --- | --- |
-| first v2 alpha | 0.1.8 / 1.5.6 | `bump=explicit`, `explicit_version=2.0.0-alpha.0` | `2.0.0-alpha.0` | alpha |
-| next alpha | 2.0.0-alpha.0 | `bump=prerelease`, `preid=alpha` | `2.0.0-alpha.1` | alpha |
-| promote to beta | 2.0.0-alpha.3 | `bump=prerelease`, `preid=beta` | `2.0.0-beta.0` | beta |
-| promote to rc | 2.0.0-beta.1 | `bump=prerelease`, `preid=rc` | `2.0.0-rc.0` | rc |
-| GA | 2.0.0-rc.2 | `bump=patch` *(finalizes)* | `2.0.0` | **latest** |
-| stable patch | 2.0.22 | `bump=patch` | `2.0.23` | latest |
-| next minor's alpha | 2.0.22 | `bump=preminor`, `preid=alpha` | `2.1.0-alpha.0` | alpha |
+| seed | — | — | (local) `explicit` `2.0.0-alpha.0` | `2.0.0-alpha.0` |
+| 1 | `2.0.0-alpha.0` | alpha | `prerelease` `alpha` (default) | `2.0.0-alpha.1` |
+| 2 | `2.0.0-alpha.1` | alpha | `prerelease` `alpha` | `2.0.0-alpha.2` |
+| … | … | alpha | `prerelease` `alpha` | … |
+| last alpha | `2.0.0-alpha.3` | alpha | `prerelease` `beta` | `2.0.0-beta.0` |
+| last beta | `2.0.0-beta.1` | beta | `prerelease` `rc` | `2.0.0-rc.0` |
+| last rc (GA prep) | `2.0.0-rc.2` | rc | `patch` *(finalizes)* | `2.0.0` |
+| GA | `2.0.0` | **latest** | `preminor` `alpha` | `2.1.0-alpha.0` |
+| stable patch | `2.0.0` | latest | `patch` | `2.0.1` |
 
-The `release` job checks out `main`, bumps + commits the version, builds, pushes the commit, runs
-`./tag-packages.sh --push` (which now tags all four, including `gaunt-sloth`), creates
-`gh release create v<version>` (with `--prerelease` when the version has a prerelease suffix), and
-publishes all four to npmjs in dependency order with `--tag <derived>`. Publishing uses npm
-Trusted Publishing (OIDC) — no token. Each package's Trusted Publisher on npmjs must point at this
-repo and `release.yml`.
+The key mental shift from a "compute target, then release" model: **channel moves and finalize are
+chosen on the run that ships the *last* of the previous channel.** Shipping the last alpha with a
+post-bump of `prerelease`+`beta` leaves `2.0.0-beta.0` on `main`, so the next run ships the first
+beta. Likewise, finalizing happens by post-bumping with `patch` on the run that ships the last rc —
+that run ships `2.0.0-rc.2` and leaves `2.0.0` on `main` for the GA run.
+
+#### Idempotency caveat (accepted): mid-publish npm outage
+
+The version-level idempotency above protects against re-shipping, but `publish-all.sh` publishes
+the four packages sequentially and has **no auto-skip** of already-published versions (deliberate).
+If an npm outage interrupts mid-publish, some of the four may be live and others not. Re-dispatching
+would fail on the already-published ones. **Recovery is manual** and accepted: publish the
+remaining stragglers by hand at the same current version, e.g.
+
+```bash
+REGISTRY=https://registry.npmjs.org \
+  NPM_PUBLISH_ARGS="--access public --provenance --tag <derived>" \
+  npm publish -w <straggler-package>
+```
+
+then re-create the tag/release/post-bump steps as needed. This trade-off (manual straggler
+recovery in a rare outage) was chosen over baking skip-if-published logic into `publish-all.sh`.
+
+The `release` job uses npm Trusted Publishing (OIDC) — no token. Each package's Trusted Publisher
+on npmjs must point at this repo and `release.yml`.
 
 ### Releasing manually
 
