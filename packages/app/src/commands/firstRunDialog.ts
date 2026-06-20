@@ -12,7 +12,13 @@ import {
   displaySuccess,
   displayWarning,
 } from '@gaunt-sloth/core/utils/consoleUtils.js';
-import { createInterface, env, stdin, stdout } from '@gaunt-sloth/core/utils/systemUtils.js';
+import {
+  createInterface,
+  env,
+  stdin,
+  stdout,
+  type ReadLineInterface,
+} from '@gaunt-sloth/core/utils/systemUtils.js';
 import {
   getGslothConfigWritePath,
   writeFileIfNotExistsWithMessages,
@@ -201,8 +207,17 @@ function makeDefaultSelect(ask: AskFn): SelectFn {
 export async function runFirstRunDialog(
   overrides: Partial<FirstRunDialogDeps> = {}
 ): Promise<void> {
-  const rl = overrides.ask ? null : createInterface({ input: stdin, output: stdout });
-  const ask: AskFn = overrides.ask ?? ((q) => rl!.question(q));
+  // The readline interface is created LAZILY, only when a readline prompt is actually needed
+  // (the non-TTY number-menu fallback, or free-text model entry). On the Ink-select path it is
+  // never created, so readline never binds stdin/raw-mode alongside Ink — two owners on the same
+  // stdin is what corrupted the terminal handoff into the session's TUI.
+  const rlHolder: { current: ReadLineInterface | null } = { current: null };
+  const ask: AskFn =
+    overrides.ask ??
+    ((q) => {
+      rlHolder.current ??= createInterface({ input: stdin, output: stdout });
+      return rlHolder.current.question(q);
+    });
   const deps: FirstRunDialogDeps = {
     detectProviders,
     listModels,
@@ -279,6 +294,6 @@ export async function runFirstRunDialog(
       displayInfo('Remember to set your API key environment variable before running gsloth.');
     }
   } finally {
-    rl?.close();
+    rlHolder.current?.close();
   }
 }

@@ -3,7 +3,11 @@ import {
   createInteractiveSession,
   type SessionConfig,
 } from '@gaunt-sloth/agent/modules/interactiveSessionModule.js';
-import { displayInfo, displayWarning } from '@gaunt-sloth/core/utils/consoleUtils.js';
+import {
+  displayInfo,
+  displaySuccess,
+  displayWarning,
+} from '@gaunt-sloth/core/utils/consoleUtils.js';
 import { env, stdin, stdout } from '@gaunt-sloth/core/utils/systemUtils.js';
 import { shouldUseTui } from '#src/tui/shouldUseTui.js';
 import { isInkAvailable } from '#src/tui/loadInk.js';
@@ -42,7 +46,13 @@ export async function startSession(
       displayWarning('Setup was not completed. Re-run gth once a configuration exists.');
       return;
     }
-    displayInfo('Setup complete — continuing.');
+    // Stop here rather than continuing into the session in this SAME process: the first-run
+    // dialog's Ink prompts and the session's Ink TUI both drive stdin/raw-mode, and handing the
+    // terminal from one Ink render straight to the next in-process left the TUI mounting then
+    // immediately exiting. A fresh `gth` invocation gets a clean terminal and loads the config
+    // we just wrote.
+    displaySuccess('Setup complete — run `gth` again to start your session.');
+    return;
   }
 
   // Cheap gates first (TTY/flags/env). Only probe the optional Ink deps when the

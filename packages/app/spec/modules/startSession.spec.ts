@@ -10,7 +10,7 @@ vi.mock('#src/tui/tuiSessionModule.js', () => tuiSessionMock);
 const loadInkMock = { isInkAvailable: vi.fn() };
 vi.mock('#src/tui/loadInk.js', () => loadInkMock);
 
-const consoleUtilsMock = { displayWarning: vi.fn(), displayInfo: vi.fn() };
+const consoleUtilsMock = { displayWarning: vi.fn(), displayInfo: vi.fn(), displaySuccess: vi.fn() };
 vi.mock('@gaunt-sloth/core/utils/consoleUtils.js', () => consoleUtilsMock);
 
 // CFG-10 — config presence detector. Default: a config exists, so the first-run dialog is
@@ -98,17 +98,20 @@ describe('startSession dispatcher', () => {
     expect(interactiveSessionMock.createInteractiveSession).toHaveBeenCalled();
   });
 
-  it('CFG-10: runs the first-run dialog when no config exists on an interactive TTY', async () => {
+  it('CFG-10: runs the first-run dialog when no config exists, then stops for a clean re-run', async () => {
     // No config initially; after the dialog writes one, config is present.
     configMock.hasAnyConfig.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    loadInkMock.isInkAvailable.mockResolvedValue(false); // keep on readline for assertion
+    loadInkMock.isInkAvailable.mockResolvedValue(false);
 
     const { startSession } = await import('#src/modules/startSession.js');
     await startSession(sessionConfig, {}, undefined);
 
     expect(firstRunDialogMock.runFirstRunDialog).toHaveBeenCalledTimes(1);
-    // Continues into the session once setup completes.
-    expect(interactiveSessionMock.createInteractiveSession).toHaveBeenCalledTimes(1);
+    // Does NOT continue into the session in the same process — handing the first-run dialog's
+    // Ink terminal straight into the session's Ink TUI left it mounting then exiting. The user
+    // re-runs `gth` to start with a clean terminal and the freshly written config.
+    expect(interactiveSessionMock.createInteractiveSession).not.toHaveBeenCalled();
+    expect(tuiSessionMock.createTuiSession).not.toHaveBeenCalled();
   });
 
   it('CFG-10: does NOT run the dialog or hang on a non-TTY (piped) run', async () => {
