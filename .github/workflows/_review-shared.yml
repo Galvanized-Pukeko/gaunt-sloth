@@ -50,7 +50,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm i @gaunt-sloth/review@0.1.6 @langchain/openai@1.4.7 @langchain/openrouter@0.3.0 -g && gaunt-sloth-review --version
+        run: npm i @gaunt-sloth/review@0.1.8 @langchain/google -g && gaunt-sloth-review --version
 
       - name: Extract issue number from PR title
         id: extract_issue
@@ -79,6 +79,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GSLOTH_IDENTITY_PROFILE: review
           OPEN_ROUTER_API_KEY: ${{ secrets.OPEN_ROUTER_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
       - name: Hide older AI review comments and post new one
         uses: actions/github-script@v8
