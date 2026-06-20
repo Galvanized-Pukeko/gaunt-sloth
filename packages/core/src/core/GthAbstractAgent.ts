@@ -447,7 +447,6 @@ export abstract class GthAbstractAgent implements GthAgentInterface {
 
     // Close any still-open reasoning block before flushing tool calls.
     if (reasoningOpen) {
-      reasoningOpen = false;
       yield { type: 'reasoning_end' };
     }
 
