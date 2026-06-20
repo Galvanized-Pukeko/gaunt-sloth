@@ -1,6 +1,6 @@
 {
   "name": "gaunt-sloth",
-  "version": "1.5.6",
+  "version": "2.0.0-alpha.0",
   "description": "",
   "license": "MIT",
   "author": "Andrew Kondratev",
@@ -37,9 +37,9 @@
     "gth": "cli.js"
   },
   "dependencies": {
-    "@gaunt-sloth/agent": "0.1.8",
-    "@gaunt-sloth/core": "0.1.8",
-    "@gaunt-sloth/review": "0.1.8",
+    "@gaunt-sloth/agent": "2.0.0-alpha.0",
+    "@gaunt-sloth/core": "2.0.0-alpha.0",
+    "@gaunt-sloth/review": "2.0.0-alpha.0",
     "@langchain/anthropic": "^1.4.1",
     "@langchain/core": "^1.1.49",
     "@langchain/deepseek": "^1.0.27",
@@ -71,5 +71,8 @@
     "./dist/*",
     "cli.js",
     ".gsloth.*.md"
-  ]
+  ],
+  "publishConfig": {
+    "tag": "alpha"
+  }
 }
