@@ -257,8 +257,8 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 ] as const;
 
 /**
- * Compile-time guard: every cloud `availableDefaultConfigs` entry must have a
- * descriptor (ollama is the only extra id).
+ * Compile-time guard: every `availableDefaultConfigs` entry (including ollama)
+ * must have a model-discovery descriptor.
  */
 const DESCRIPTOR_IDS = new Set(PROVIDER_DESCRIPTORS.map((d) => d.id));
 for (const cfg of availableDefaultConfigs) {
