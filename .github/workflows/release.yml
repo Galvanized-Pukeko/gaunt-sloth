@@ -105,10 +105,8 @@ jobs:
         node-version: [24.x]
     steps:
       - uses: actions/checkout@v6
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.3.0
+      - name: Enable Corepack
+        run: corepack enable
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v6
         with:
@@ -133,10 +131,8 @@ jobs:
         node-version: [24.x]
     steps:
       - uses: actions/checkout@v6
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.3.0
+      - name: Enable Corepack
+        run: corepack enable
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v6
         with:
@@ -170,10 +166,8 @@ jobs:
       max-parallel: 2
     steps:
       - uses: actions/checkout@v6
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.3.0
+      - name: Enable Corepack
+        run: corepack enable
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v6
         with:
@@ -215,10 +209,8 @@ jobs:
           # pushes; the GitHub Release (gh) and npm publish use the API/registry
           # and are unaffected.
           ssh-key: ${{ secrets.RELEASE_SSH_KEY }}
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.3.0
+      - name: Enable Corepack
+        run: corepack enable
       - name: Use Node.js
         uses: actions/setup-node@v6
         with:
