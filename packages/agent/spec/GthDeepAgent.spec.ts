@@ -20,10 +20,12 @@ vi.mock('deepagents', () => ({
 const buildSystemMessagesMock = vi.fn();
 const readChatPromptMock = vi.fn();
 const readCodePromptMock = vi.fn();
+const readExecPromptMock = vi.fn();
 vi.mock('@gaunt-sloth/core/utils/llmUtils.js', () => ({
   buildSystemMessages: buildSystemMessagesMock,
   readChatPrompt: readChatPromptMock,
   readCodePrompt: readCodePromptMock,
+  readExecPrompt: readExecPromptMock,
   formatToolCalls: vi.fn(() => ''),
 }));
 
@@ -49,6 +51,7 @@ describe('GthDeepAgent', () => {
     createDeepAgentMock.mockReturnValue({ invoke: vi.fn(), stream: vi.fn() });
     readChatPromptMock.mockReturnValue('chat-mode-prompt');
     readCodePromptMock.mockReturnValue('code-mode-prompt');
+    readExecPromptMock.mockReturnValue('exec-mode-prompt');
     buildSystemMessagesMock.mockReturnValue([{ content: 'SYSTEM PROMPT' }]);
   });
 
@@ -73,6 +76,37 @@ describe('GthDeepAgent', () => {
     expect((params.backend as FilesystemBackendStub).options).toMatchObject({ virtualMode: true });
     expect(params.permissions).toEqual(buildPermissions({ filesystem: 'none' }));
     expect(params.tools.map((t: { name: string }) => t.name)).toEqual(['foo']);
+  });
+
+  it('with allowDirs (--allow-dir) drops virtualMode and uses the widened permission allow-list', async () => {
+    const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
+    const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
+    const config = makeConfig({ filesystem: 'all', allowDirs: ['/tmp/out'] });
+
+    await agent.init('exec', config);
+
+    const params = createDeepAgentMock.mock.calls[0][0];
+    // Sandbox widened: backend runs without virtualMode so real absolute paths resolve.
+    expect((params.backend as FilesystemBackendStub).options).toMatchObject({ virtualMode: false });
+    // Permissions use the widened cwd + allowDirs allow-list rather than plain filesystem mode.
+    expect(params.permissions).toEqual(
+      buildPermissions({ filesystem: 'all', allowDirs: ['/tmp/out'] })
+    );
+    // And it announces the guardrail removal loudly.
+    expect(statusUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('widened beyond cwd')
+    );
+  });
+
+  it('without allowDirs keeps virtualMode on (default cwd sandbox)', async () => {
+    const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
+    const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
+
+    await agent.init('exec', makeConfig({ filesystem: 'all' }));
+
+    const params = createDeepAgentMock.mock.calls[0][0];
+    expect((params.backend as FilesystemBackendStub).options).toMatchObject({ virtualMode: true });
   });
 
   it('passes the composed gsloth system prompt to createDeepAgent (chat prompt by default)', async () => {

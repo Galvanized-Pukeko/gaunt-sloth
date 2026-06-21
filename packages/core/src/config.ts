@@ -250,6 +250,11 @@ export interface GthConfig {
       customTools?: CustomToolsConfig | false;
       /** See {@link GthConfig.allowedTools}. */
       allowedTools?: string[];
+      /**
+       * Dev tools (run commands etc.) for `ask --write` runs. Normally inherited from
+       * `commands.exec` / `commands.code` by the `--write` flag rather than set directly.
+       */
+      devTools?: GthDevToolsConfig;
       binaryFormats?: false | BinaryFormatConfig[];
     };
     chat?: {
@@ -294,6 +299,21 @@ export interface GthConfig {
     };
   };
   modelDisplayName?: string;
+  /**
+   * Transient (runtime-only) extra filesystem roots the agent is allowed to read/write for
+   * THIS run, in addition to the cwd sandbox. Populated by `gth exec --allow-dir <path>`
+   * (repeatable); never persisted to a config file. When set, the deep agent's
+   * {@link FilesystemBackend} drops `virtualMode` (so absolute paths and `..` resolve on the
+   * real filesystem) and access is constrained to cwd + these dirs via permission allow-rules.
+   * Removing the cwd-only sandbox is a guardrail removal, so callers announce it loudly.
+   */
+  allowDirs?: string[];
+  /**
+   * Transient (runtime-only) flag set by `gth ask --write`: opt `ask` into the same
+   * "do-the-job" filesystem + dev tools that `exec`/`code` get, so a question can act
+   * (read/write files, run commands) rather than only chat. Never persisted to a config file.
+   */
+  askWriteMode?: boolean;
 }
 
 /**
