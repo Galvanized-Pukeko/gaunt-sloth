@@ -8,13 +8,16 @@
  *
  * 1. **Which providers are usable on this machine?** — by inspecting the
  *    environment (and config) for API keys, and by probing for a local Ollama.
- * 2. **What models does each usable provider offer?** — a curated list of
- *    ⭐ "preferred" / tested models per cloud provider, and the live
- *    `ollama ls` inventory for the local Ollama provider.
+ * 2. **What models does each usable provider offer?** — a live `GET /v1/models`
+ *    query for providers that expose an OpenAI-compatible (or, for Anthropic, a
+ *    native) models endpoint, falling back to a curated ⭐ "preferred" / tested
+ *    list when the live query is unavailable, errors, or is empty.
  *
- * It deliberately performs **no** network calls to paid providers: cloud model
- * lists are the curated/tested set we ship, not a live `/models` query. Only the
- * local Ollama daemon is probed (cheap, local, free).
+ * Live discovery (CFG-12) is best-effort and never fatal: a bad key, an offline
+ * machine, or a malformed response simply degrades to the curated catalog so the
+ * first-run dialog always has something to show. The curated `preferredModels`
+ * therefore do double duty — the ⭐ ranking overlay over live ids **and** the
+ * offline/timeout fallback.
  *
  * The provider ids here are the same strings used by {@link LLMConfig.type} and
  * the provider factory in `#src/providers/<type>.js`, so a selected
@@ -22,7 +25,7 @@
  */
 import { availableDefaultConfigs, type ConfigType } from '#src/config.js';
 import { displayDebug } from '#src/utils/consoleUtils.js';
-import { env, execAsync } from '#src/utils/systemUtils.js';
+import { env } from '#src/utils/systemUtils.js';
 
 /**
  * Provider identifiers understood by model discovery. These match the provider
@@ -45,8 +48,42 @@ export interface ModelInfo {
 }
 
 /**
- * Static description of a provider: how to detect its key and which models we
- * recommend. Used to build {@link DetectedProvider}s.
+ * How a provider's live model catalog can be queried.
+ *
+ * - `openai`  — an OpenAI-compatible `GET /v1/models` (`{ data: [{ id }] }`).
+ *   Covers openai, openrouter, groq, deepseek, xai and ollama (local).
+ * - `anthropic` — Anthropic's native `GET /v1/models`
+ *   (`{ data: [{ type, id, display_name }] }`) with `x-api-key` auth.
+ * - `none`     — no cheap live endpoint; stay on the curated list
+ *   (google-genai, vertexai).
+ */
+export type DiscoveryKind = 'openai' | 'anthropic' | 'none';
+
+/**
+ * Per-provider live-discovery adapter. Bundled on the {@link ProviderDescriptor}
+ * so {@link discoverModels} can be fully data-driven.
+ */
+export interface DiscoveryConfig {
+  kind: DiscoveryKind;
+  /**
+   * The models endpoint to fetch. `host` is supplied only for ollama (the
+   * resolved daemon host); cloud providers ignore it and return a fixed URL.
+   */
+  modelsUrl?: (host?: string) => string;
+  /** Build the auth headers from the resolved API key (may be empty for ollama). */
+  authHeader?: (key: string) => Record<string, string>;
+  /**
+   * Keep only chat-capable model ids. Live endpoints return embeddings, TTS,
+   * whisper, image, guard, etc. alongside chat models; this prunes them.
+   * When omitted, all returned ids are kept.
+   */
+  filter?: (id: string) => boolean;
+}
+
+/**
+ * Static description of a provider: how to detect its key, how to discover its
+ * live models, and which models we recommend. Used to build
+ * {@link DetectedProvider}s.
  */
 export interface ProviderDescriptor {
   id: ProviderId;
@@ -61,20 +98,45 @@ export interface ProviderDescriptor {
   apiKeyEnvironmentVariables: string[];
   /**
    * Curated ⭐ "preferred" / tested models for this provider, most-recommended
-   * first. For cloud providers this is the entire offered list. For `ollama`
-   * the real list comes from the daemon; this acts only as the set of model
-   * ids we mark as preferred when present locally.
+   * first. Used as the ⭐ ranking overlay over live-discovered ids and as the
+   * fallback catalog when live discovery is unavailable.
    */
   preferredModels: string[];
+  /** Live-discovery adapter for this provider. */
+  discovery: DiscoveryConfig;
   /**
    * True when usability cannot be determined from an env var alone.
    * `vertexai` relies on gcloud Application Default Credentials and `ollama`
    * on a running local daemon, so both are reported as `available: false` by
-   * env inspection and must be confirmed by the caller (or, for ollama, by
-   * {@link detectOllama}).
+   * env inspection (ollama is then confirmed by a live probe in
+   * {@link detectProviders}).
    */
   requiresExternalAuth?: boolean;
 }
+
+/** Default Ollama host, matching the Ollama CLI/library default. */
+export const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
+
+function resolveOllamaHost(): string {
+  const host = env.OLLAMA_HOST;
+  if (!host) return DEFAULT_OLLAMA_HOST;
+  // OLLAMA_HOST may be a bare host:port; normalize to a URL.
+  if (/^https?:\/\//.test(host)) return host.replace(/\/$/, '');
+  return `http://${host}`.replace(/\/$/, '');
+}
+
+/** `Authorization: Bearer <key>` — the OpenAI-compatible auth scheme. */
+const bearer = (key: string): Record<string, string> => ({ Authorization: `Bearer ${key}` });
+
+/**
+ * Chat-only filter for OpenAI-shaped catalogs. Drops the obvious non-chat model
+ * classes (embeddings, audio/speech, image, moderation, guard) that the live
+ * endpoints return alongside chat models. Deliberately permissive: anything not
+ * recognised as non-chat is kept, so a new chat family is never hidden.
+ */
+const NON_CHAT_PATTERN =
+  /(embed|moderation|whisper|tts|audio|transcribe|dall-e|image|imagine|guard|rerank|vision-ocr)/i;
+const chatOnly = (id: string): boolean => !NON_CHAT_PATTERN.test(id);
 
 /**
  * Provider registry. The curated `preferredModels` are the models we have
@@ -87,24 +149,37 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
     label: 'Anthropic (Claude)',
     apiKeyEnvironmentVariables: ['ANTHROPIC_API_KEY'],
     preferredModels: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'],
+    discovery: {
+      kind: 'anthropic',
+      modelsUrl: () => 'https://api.anthropic.com/v1/models',
+      authHeader: (key) => ({ 'x-api-key': key, 'anthropic-version': '2023-06-01' }),
+    },
   },
   {
     id: 'openai',
     label: 'OpenAI',
     apiKeyEnvironmentVariables: ['OPENAI_API_KEY'],
     preferredModels: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
+    discovery: {
+      kind: 'openai',
+      modelsUrl: () => 'https://api.openai.com/v1/models',
+      authHeader: bearer,
+      filter: chatOnly,
+    },
   },
   {
     id: 'google-genai',
     label: 'Google AI Studio (Gemini)',
     apiKeyEnvironmentVariables: ['GOOGLE_API_KEY'],
     preferredModels: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+    discovery: { kind: 'none' },
   },
   {
     id: 'vertexai',
     label: 'Google Vertex AI (Gemini)',
     apiKeyEnvironmentVariables: [],
     preferredModels: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+    discovery: { kind: 'none' },
     requiresExternalAuth: true,
   },
   {
@@ -112,18 +187,37 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
     label: 'Groq',
     apiKeyEnvironmentVariables: ['GROQ_API_KEY'],
     preferredModels: ['openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct'],
+    discovery: {
+      kind: 'openai',
+      // Groq's OpenAI-compatible surface lives under /openai/v1.
+      modelsUrl: () => 'https://api.groq.com/openai/v1/models',
+      authHeader: bearer,
+      filter: chatOnly,
+    },
   },
   {
     id: 'deepseek',
     label: 'DeepSeek',
     apiKeyEnvironmentVariables: ['DEEPSEEK_API_KEY'],
     preferredModels: ['deepseek-reasoner', 'deepseek-chat'],
+    discovery: {
+      kind: 'openai',
+      modelsUrl: () => 'https://api.deepseek.com/v1/models',
+      authHeader: bearer,
+      filter: chatOnly,
+    },
   },
   {
     id: 'xai',
     label: 'xAI (Grok)',
     apiKeyEnvironmentVariables: ['XAI_API_KEY'],
     preferredModels: ['grok-4-1-fast', 'grok-4'],
+    discovery: {
+      kind: 'openai',
+      modelsUrl: () => 'https://api.x.ai/v1/models',
+      authHeader: bearer,
+      filter: chatOnly,
+    },
   },
   {
     id: 'openrouter',
@@ -132,6 +226,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
     label: 'OpenRouter',
     apiKeyEnvironmentVariables: ['OPEN_ROUTER_API_KEY', 'OPENROUTER_API_KEY'],
     preferredModels: ['qwen/qwen3-coder', 'anthropic/claude-sonnet-4-5'],
+    discovery: {
+      kind: 'openai',
+      modelsUrl: () => 'https://openrouter.ai/api/v1/models',
+      authHeader: bearer,
+      filter: chatOnly,
+    },
   },
   {
     id: 'ollama',
@@ -139,6 +239,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
     apiKeyEnvironmentVariables: [],
     // Models we have tested locally; only marked preferred when actually pulled.
     preferredModels: ['qwen3-coder', 'qwen3', 'deepseek-r1', 'gemma3'],
+    discovery: {
+      kind: 'openai',
+      // Ollama serves an OpenAI-compatible /v1/models on the local daemon.
+      modelsUrl: (host) => `${host ?? resolveOllamaHost()}/v1/models`,
+      authHeader: () => ({}),
+    },
     requiresExternalAuth: true,
   },
 ] as const;
@@ -177,17 +283,6 @@ export interface DetectedProvider {
   models: ModelInfo[];
 }
 
-/** Default Ollama host, matching the Ollama CLI/library default. */
-export const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
-
-function resolveOllamaHost(): string {
-  const host = env.OLLAMA_HOST;
-  if (!host) return DEFAULT_OLLAMA_HOST;
-  // OLLAMA_HOST may be a bare host:port; normalize to a URL.
-  if (/^https?:\/\//.test(host)) return host.replace(/\/$/, '');
-  return `http://${host}`.replace(/\/$/, '');
-}
-
 /**
  * Resolve the API key for a cloud provider by checking its env vars in order.
  * @returns the matching env var name, or undefined when none is set.
@@ -203,64 +298,14 @@ export function findApiKeyEnvVar(descriptor: ProviderDescriptor): string | undef
 }
 
 /**
- * Probe for a local Ollama daemon and list its installed models.
- *
- * Tries the HTTP API (`GET /api/tags`) first — it is the same data the
- * `ollama list` CLI prints but does not require the binary on PATH — and falls
- * back to running `ollama ls` when the API is unreachable. Returns
- * `{ available: false }` when neither responds, so a machine without Ollama is
- * simply reported as unavailable rather than throwing.
- */
-export async function detectOllama(): Promise<{ available: boolean; models: string[] }> {
-  // 1. HTTP API — cheap, no binary required.
-  try {
-    const res = await fetch(`${resolveOllamaHost()}/api/tags`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(1500),
-    });
-    if (res.ok) {
-      const body = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
-      const models = (body.models ?? [])
-        .map((m) => m.name ?? m.model)
-        .filter((name): name is string => Boolean(name));
-      return { available: true, models };
-    }
-  } catch (e) {
-    displayDebug(`Ollama HTTP probe failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  // 2. Fall back to the CLI.
-  try {
-    const out = await execAsync('ollama ls');
-    return { available: true, models: parseOllamaList(out) };
-  } catch (e) {
-    displayDebug(`Ollama CLI probe failed: ${e instanceof Error ? e.message : String(e)}`);
-    return { available: false, models: [] };
-  }
-}
-
-/**
- * Parse the tabular output of `ollama ls` / `ollama list` into model ids.
- * The first column ("NAME") holds the model tag; the header row is skipped.
- */
-export function parseOllamaList(stdout: string): string[] {
-  return stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .filter((line) => !/^NAME\s+ID\s/i.test(line) && !/^NAME\b/i.test(line))
-    .map((line) => line.split(/\s+/)[0])
-    .filter((name) => name.length > 0);
-}
-
-/**
  * Build the {@link ModelInfo} list for a provider given the descriptor and an
- * optional set of model ids known to actually exist (e.g. from `ollama ls`).
+ * optional set of model ids known to actually exist (e.g. from a live
+ * `/v1/models` query or the local Ollama daemon).
  *
- * - When `discoveredModels` is omitted (cloud providers), the curated
- *   `preferredModels` are returned, all flagged ⭐ preferred.
- * - When provided (ollama), every discovered model is listed; those that also
- *   appear in the curated `preferredModels` are flagged ⭐ preferred.
+ * - When `discoveredModels` is omitted, the curated `preferredModels` are
+ *   returned, all flagged ⭐ preferred.
+ * - When provided, every discovered model is listed; those that also appear in
+ *   the curated `preferredModels` are flagged ⭐ preferred.
  */
 export function buildModelList(
   descriptor: ProviderDescriptor,
@@ -277,33 +322,133 @@ export function buildModelList(
   return discoveredModels.map((id) => ({ id, preferred: isPreferred(id) }));
 }
 
+/** Live-fetch timeout: short enough to never block first-run for long. */
+const DISCOVERY_TIMEOUT_MS = 2000;
+
 /**
- * List the models for a single provider.
- *
- * For `ollama` this probes the local daemon; for everyone else it returns the
- * curated ⭐ preferred set. Does not require the provider to be "available".
+ * Parse the `id`s out of a models-endpoint payload. Both the OpenAI-compatible
+ * shape and Anthropic's native shape use a top-level `{ data: [{ id }] }`
+ * envelope, so a single parser covers both `kind`s.
  */
-export async function listModels(providerId: ProviderId): Promise<ModelInfo[]> {
+function parseModelIds(body: unknown): string[] {
+  const data = (body as { data?: Array<{ id?: unknown }> } | null)?.data;
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((m) => m?.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Internal: run live discovery for one descriptor, distinguishing a successful
+ * live query from a curated fallback.
+ *
+ * @returns `{ models, live }` where `live` is true only when the models came
+ *   from a successful, non-empty live `/v1/models` query (used as the Ollama
+ *   availability signal). `live` is false for curated/fallback results.
+ */
+async function discoverModelsInternal(
+  descriptor: ProviderDescriptor
+): Promise<{ models: ModelInfo[]; live: boolean }> {
+  const curated = (): { models: ModelInfo[]; live: boolean } => ({
+    models: buildModelList(descriptor),
+    live: false,
+  });
+
+  const { discovery } = descriptor;
+  if (discovery.kind === 'none' || !discovery.modelsUrl) {
+    return curated();
+  }
+
+  // Resolve an API key for cloud providers; ollama needs none.
+  let key = '';
+  if (descriptor.id !== 'ollama') {
+    const envVar = findApiKeyEnvVar(descriptor);
+    if (!envVar) {
+      // No key → don't hit the network; show the curated catalog.
+      return curated();
+    }
+    key = env[envVar] ?? '';
+  }
+
+  try {
+    const url = discovery.modelsUrl(descriptor.id === 'ollama' ? resolveOllamaHost() : undefined);
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      ...(discovery.authHeader ? discovery.authHeader(key) : {}),
+    };
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      displayDebug(`Model discovery for "${descriptor.id}" returned HTTP ${res.status}.`);
+      return curated();
+    }
+    const body = await res.json();
+    let ids = parseModelIds(body);
+    if (discovery.filter) {
+      ids = ids.filter(discovery.filter);
+    }
+    if (ids.length === 0) {
+      displayDebug(`Model discovery for "${descriptor.id}" returned no usable models.`);
+      return curated();
+    }
+    return { models: buildModelList(descriptor, ids), live: true };
+  } catch (e) {
+    displayDebug(
+      `Model discovery for "${descriptor.id}" failed: ${e instanceof Error ? e.message : String(e)}`
+    );
+    return curated();
+  }
+}
+
+/**
+ * Discover the models for a single provider.
+ *
+ * - `kind: 'none'` → returns the curated `buildModelList(descriptor)`.
+ * - `kind: 'openai' | 'anthropic'` → fetches the models endpoint with a short
+ *   timeout, parses `data[].id`, applies the chat-only `filter`, and overlays
+ *   the ⭐ preferred flags via `buildModelList(descriptor, liveIds)`.
+ *
+ * Best-effort: any error / non-2xx / malformed / empty payload falls back to
+ * the curated list. This function NEVER throws — a bad key must degrade to the
+ * curated catalog, not break first-run config.
+ *
+ * Cloud providers are only probed live when an API key is present; without a key
+ * the curated catalog is returned directly. Ollama (no key, local daemon) is
+ * always probed.
+ */
+export async function discoverModels(providerId: ProviderId): Promise<ModelInfo[]> {
   const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === providerId);
   if (!descriptor) {
     throw new Error(`Unknown provider: ${providerId}`);
   }
-  if (descriptor.id === 'ollama') {
-    const { models } = await detectOllama();
-    return buildModelList(descriptor, models);
-  }
-  return buildModelList(descriptor);
+  const { models } = await discoverModelsInternal(descriptor);
+  return models;
+}
+
+/**
+ * List the models for a single provider.
+ *
+ * Live-discovers from the provider's models endpoint where possible (with a
+ * curated fallback); returns the curated set for `kind: 'none'` providers. Does
+ * not require the provider to be "available".
+ */
+export async function listModels(providerId: ProviderId): Promise<ModelInfo[]> {
+  return discoverModels(providerId);
 }
 
 /**
  * Detect every known provider on this machine and list its models.
  *
- * - Cloud providers are `available` when one of their API-key env vars is set.
+ * - Cloud providers are `available` when one of their API-key env vars is set;
+ *   their model list is live-discovered (curated fallback) when a key is present.
  * - `vertexai` is reported with `requiresExternalAuth: true` and
  *   `available: false`; usability via gcloud ADC cannot be cheaply verified
  *   here and is left to the caller / a live run.
- * - `ollama` is `available` when a local daemon responds, and its model list is
- *   the live `ollama ls` inventory.
+ * - `ollama` is `available` when the local daemon's `/v1/models` responds, and
+ *   its model list is that live inventory.
  *
  * @param options.includeUnavailable when true (default), every provider is
  *   returned (so a dialog can offer "set a key" flows); when false, only
@@ -314,31 +459,30 @@ export async function detectProviders(
 ): Promise<DetectedProvider[]> {
   const { includeUnavailable = true } = options;
 
-  // Probe ollama once, in parallel with the (synchronous) env checks.
-  const ollamaProbe = detectOllama();
-
   const results: DetectedProvider[] = [];
   for (const descriptor of PROVIDER_DESCRIPTORS) {
     if (descriptor.id === 'ollama') {
-      const { available, models } = await ollamaProbe;
+      // A successful, non-empty /v1/models probe = the daemon is available.
+      const { models, live } = await discoverModelsInternal(descriptor);
       results.push({
         id: descriptor.id,
         label: descriptor.label,
-        available,
+        available: live,
         requiresExternalAuth: true,
-        models: buildModelList(descriptor, models),
+        models,
       });
       continue;
     }
 
     const apiKeyEnvironmentVariable = findApiKeyEnvVar(descriptor);
+    const models = await discoverModels(descriptor.id);
     results.push({
       id: descriptor.id,
       label: descriptor.label,
       available: Boolean(apiKeyEnvironmentVariable),
       apiKeyEnvironmentVariable,
       requiresExternalAuth: Boolean(descriptor.requiresExternalAuth),
-      models: buildModelList(descriptor),
+      models,
     });
   }
 

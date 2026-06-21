@@ -10,27 +10,34 @@ const consoleUtilsMock = {
 };
 vi.mock('#src/utils/consoleUtils.js', () => consoleUtilsMock);
 
-// systemUtils exposes `env` (process.env) and `execAsync`. We mock both so the
-// tests are hermetic with respect to the real machine's environment / binaries.
+// systemUtils exposes `env` (process.env). We mock it so the tests are hermetic
+// with respect to the real machine's environment.
 const systemUtilsMock = {
   env: {} as Record<string, string | undefined>,
-  execAsync: vi.fn(),
 };
 vi.mock('#src/utils/systemUtils.js', () => systemUtilsMock);
+
+/** Build a fetch mock that returns an OpenAI-shaped `{ data: [{ id }] }` body. */
+function okJson(body: unknown) {
+  return vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => body,
+  }));
+}
 
 describe('modelDiscovery', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     // Fresh, empty environment per test.
     systemUtilsMock.env = {};
-    // Default: no Ollama daemon and no CLI.
+    // Default: every network call fails (no daemon, no provider reachable).
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
         throw new Error('connection refused');
       })
     );
-    systemUtilsMock.execAsync.mockRejectedValue(new Error('command not found: ollama'));
   });
 
   describe('findApiKeyEnvVar', () => {
@@ -52,23 +59,6 @@ describe('modelDiscovery', () => {
     });
   });
 
-  describe('parseOllamaList', () => {
-    it('extracts model tags from `ollama ls` output and skips the header', async () => {
-      const { parseOllamaList } = await import('#src/providers/modelDiscovery.js');
-      const stdout = [
-        'NAME             ID              SIZE      MODIFIED',
-        'qwen3:latest     abc123          4.7 GB    2 days ago',
-        'deepseek-r1:8b   def456          5.2 GB    1 week ago',
-      ].join('\n');
-      expect(parseOllamaList(stdout)).toEqual(['qwen3:latest', 'deepseek-r1:8b']);
-    });
-
-    it('returns an empty array for empty output', async () => {
-      const { parseOllamaList } = await import('#src/providers/modelDiscovery.js');
-      expect(parseOllamaList('')).toEqual([]);
-    });
-  });
-
   describe('buildModelList', () => {
     it('flags all curated models as preferred for cloud providers', async () => {
       const { buildModelList, PROVIDER_DESCRIPTORS } =
@@ -77,10 +67,10 @@ describe('modelDiscovery', () => {
       const models = buildModelList(descriptor);
       expect(models.length).toBeGreaterThan(0);
       expect(models.every((m) => m.preferred)).toBe(true);
-      expect(models[0].id).toBe('claude-sonnet-4-5');
+      expect(models[0].id).toBe(descriptor.preferredModels[0]);
     });
 
-    it('flags discovered ollama models preferred only when curated (ignoring :latest)', async () => {
+    it('flags discovered models preferred only when curated (ignoring :latest)', async () => {
       const { buildModelList, PROVIDER_DESCRIPTORS } =
         await import('#src/providers/modelDiscovery.js');
       const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'ollama')!;
@@ -92,65 +82,185 @@ describe('modelDiscovery', () => {
     });
   });
 
-  describe('detectOllama', () => {
-    it('lists models from the HTTP /api/tags endpoint when reachable', async () => {
+  describe('discoverModels', () => {
+    it('throws for an unknown provider', async () => {
+      const { discoverModels } = await import('#src/providers/modelDiscovery.js');
+      await expect(discoverModels('nope' as any)).rejects.toThrow('Unknown provider: nope');
+    });
+
+    it('queries the OpenAI-style endpoint and returns live ids with chat filtering', async () => {
+      systemUtilsMock.env.OPENAI_API_KEY = 'sk-openai-123';
+      const fetchMock = okJson({
+        data: [
+          { id: 'gpt-live-chat' },
+          { id: 'text-embedding-3-large' }, // dropped by chat filter
+          { id: 'whisper-1' }, // dropped by chat filter
+          { id: 'dall-e-3' }, // dropped by chat filter
+        ],
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { discoverModels, PROVIDER_DESCRIPTORS } =
+        await import('#src/providers/modelDiscovery.js');
+
+      const models = await discoverModels('openai');
+
+      // Correct URL + bearer auth used.
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://api.openai.com/v1/models');
+      expect((init as RequestInit).headers).toMatchObject({
+        Authorization: 'Bearer sk-openai-123',
+      });
+      // Only the chat model survives the filter.
+      expect(models.map((m) => m.id)).toEqual(['gpt-live-chat']);
+      // Live id not in curated preferredModels → not flagged preferred.
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'openai')!;
+      expect(descriptor.preferredModels).not.toContain('gpt-live-chat');
+      expect(models[0].preferred).toBe(false);
+    });
+
+    it('overlays preferred flags and preserves live ordering', async () => {
+      systemUtilsMock.env.OPENAI_API_KEY = 'sk-openai-123';
+      const { PROVIDER_DESCRIPTORS } = await import('#src/providers/modelDiscovery.js');
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'openai')!;
+      const preferred = descriptor.preferredModels[0];
+
+      vi.stubGlobal('fetch', okJson({ data: [{ id: 'gpt-other' }, { id: preferred }] }));
+      const { discoverModels } = await import('#src/providers/modelDiscovery.js');
+      const models = await discoverModels('openai');
+
+      // Order follows the live list, not the curated list.
+      expect(models.map((m) => m.id)).toEqual(['gpt-other', preferred]);
+      expect(models.find((m) => m.id === 'gpt-other')!.preferred).toBe(false);
+      expect(models.find((m) => m.id === preferred)!.preferred).toBe(true);
+    });
+
+    it('falls back to the curated list on a network error', async () => {
+      systemUtilsMock.env.OPENAI_API_KEY = 'sk-openai-123';
       vi.stubGlobal(
         'fetch',
-        vi.fn(async () => ({
-          ok: true,
-          json: async () => ({ models: [{ name: 'qwen3:latest' }, { name: 'gemma3:latest' }] }),
-        }))
+        vi.fn(async () => {
+          throw new Error('timeout');
+        })
       );
-      const { detectOllama } = await import('#src/providers/modelDiscovery.js');
-      const result = await detectOllama();
-      expect(result.available).toBe(true);
-      expect(result.models).toEqual(['qwen3:latest', 'gemma3:latest']);
-      // CLI fallback must not be used when HTTP succeeds.
-      expect(systemUtilsMock.execAsync).not.toHaveBeenCalled();
+      const { discoverModels, PROVIDER_DESCRIPTORS } =
+        await import('#src/providers/modelDiscovery.js');
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'openai')!;
+
+      const models = await discoverModels('openai');
+      expect(models.map((m) => m.id)).toEqual(descriptor.preferredModels);
+      expect(models.every((m) => m.preferred)).toBe(true);
+      expect(consoleUtilsMock.displayDebug).toHaveBeenCalled();
     });
 
-    it('falls back to `ollama ls` when the HTTP probe fails', async () => {
-      systemUtilsMock.execAsync.mockResolvedValue(
-        ['NAME           ID       SIZE', 'qwen3:latest   abc      4.7 GB'].join('\n')
+    it('falls back to the curated list on a non-2xx response', async () => {
+      systemUtilsMock.env.OPENAI_API_KEY = 'sk-openai-123';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) }))
       );
-      const { detectOllama } = await import('#src/providers/modelDiscovery.js');
-      const result = await detectOllama();
-      expect(systemUtilsMock.execAsync).toHaveBeenCalledWith('ollama ls');
-      expect(result.available).toBe(true);
-      expect(result.models).toEqual(['qwen3:latest']);
+      const { discoverModels, PROVIDER_DESCRIPTORS } =
+        await import('#src/providers/modelDiscovery.js');
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'openai')!;
+
+      const models = await discoverModels('openai');
+      expect(models.map((m) => m.id)).toEqual(descriptor.preferredModels);
     });
 
-    it('reports unavailable when neither HTTP nor CLI respond', async () => {
-      const { detectOllama } = await import('#src/providers/modelDiscovery.js');
-      const result = await detectOllama();
-      expect(result).toEqual({ available: false, models: [] });
+    it('falls back to the curated list on a malformed / empty payload', async () => {
+      systemUtilsMock.env.OPENAI_API_KEY = 'sk-openai-123';
+      vi.stubGlobal('fetch', okJson({ data: [] }));
+      const { discoverModels, PROVIDER_DESCRIPTORS } =
+        await import('#src/providers/modelDiscovery.js');
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'openai')!;
+
+      const models = await discoverModels('openai');
+      expect(models.map((m) => m.id)).toEqual(descriptor.preferredModels);
+    });
+
+    it('returns the curated list without any network call when no key is present', async () => {
+      const fetchMock = vi.fn(async () => {
+        throw new Error('should not be called');
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { discoverModels, PROVIDER_DESCRIPTORS } =
+        await import('#src/providers/modelDiscovery.js');
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'openai')!;
+
+      const models = await discoverModels('openai');
+      expect(models.map((m) => m.id)).toEqual(descriptor.preferredModels);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('returns the curated list for a kind:"none" provider (google-genai) without fetching', async () => {
+      systemUtilsMock.env.GOOGLE_API_KEY = 'g-123';
+      const fetchMock = vi.fn(async () => {
+        throw new Error('should not be called');
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { discoverModels, PROVIDER_DESCRIPTORS } =
+        await import('#src/providers/modelDiscovery.js');
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'google-genai')!;
+
+      const models = await discoverModels('google-genai');
+      expect(models.map((m) => m.id)).toEqual(descriptor.preferredModels);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('discovers ollama via the local /v1/models endpoint (no auth header)', async () => {
+      const fetchMock = okJson({
+        data: [{ id: 'qwen3:latest' }, { id: 'some-random-model:7b' }],
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { discoverModels } = await import('#src/providers/modelDiscovery.js');
+
+      const models = await discoverModels('ollama');
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('http://127.0.0.1:11434/v1/models');
+      // No Authorization header for the local daemon.
+      expect((init as RequestInit).headers).not.toHaveProperty('Authorization');
+      expect(models).toEqual([
+        { id: 'qwen3:latest', preferred: true },
+        { id: 'some-random-model:7b', preferred: false },
+      ]);
+    });
+
+    it('parses the Anthropic native models envelope with x-api-key auth', async () => {
+      systemUtilsMock.env.ANTHROPIC_API_KEY = 'sk-ant-123';
+      const fetchMock = okJson({
+        data: [
+          { type: 'model', id: 'claude-live-1', display_name: 'Claude Live 1' },
+          { type: 'model', id: 'claude-live-2', display_name: 'Claude Live 2' },
+        ],
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { discoverModels } = await import('#src/providers/modelDiscovery.js');
+
+      const models = await discoverModels('anthropic');
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://api.anthropic.com/v1/models');
+      expect((init as RequestInit).headers).toMatchObject({
+        'x-api-key': 'sk-ant-123',
+        'anthropic-version': '2023-06-01',
+      });
+      expect(models.map((m) => m.id)).toEqual(['claude-live-1', 'claude-live-2']);
     });
   });
 
   describe('listModels', () => {
-    it('returns the curated list for a cloud provider', async () => {
-      const { listModels } = await import('#src/providers/modelDiscovery.js');
+    it('delegates to discoverModels (curated fallback when offline)', async () => {
+      systemUtilsMock.env.GROQ_API_KEY = 'gsk-123';
+      const { listModels, PROVIDER_DESCRIPTORS } = await import('#src/providers/modelDiscovery.js');
+      const descriptor = PROVIDER_DESCRIPTORS.find((d) => d.id === 'groq')!;
       const models = await listModels('groq');
+      // fetch throws by default → curated fallback.
+      expect(models.map((m) => m.id)).toEqual(descriptor.preferredModels);
       expect(models.every((m) => m.preferred)).toBe(true);
-      expect(models.map((m) => m.id)).toContain('openai/gpt-oss-120b');
-    });
-
-    it('probes the daemon for ollama', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => ({
-          ok: true,
-          json: async () => ({ models: [{ name: 'qwen3:latest' }] }),
-        }))
-      );
-      const { listModels } = await import('#src/providers/modelDiscovery.js');
-      const models = await listModels('ollama');
-      expect(models).toEqual([{ id: 'qwen3:latest', preferred: true }]);
     });
 
     it('throws for an unknown provider', async () => {
       const { listModels } = await import('#src/providers/modelDiscovery.js');
-
       await expect(listModels('nope' as any)).rejects.toThrow('Unknown provider: nope');
     });
   });
@@ -174,19 +284,20 @@ describe('modelDiscovery', () => {
       expect(vertex.available).toBe(false);
     });
 
-    it('reports ollama as available with its live model list when the daemon responds', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => ({
-          ok: true,
-          json: async () => ({ models: [{ name: 'qwen3:latest' }] }),
-        }))
-      );
+    it('reports ollama available with its live model list when the daemon responds', async () => {
+      vi.stubGlobal('fetch', okJson({ data: [{ id: 'qwen3:latest' }] }));
       const { detectProviders } = await import('#src/providers/modelDiscovery.js');
       const providers = await detectProviders();
       const ollama = providers.find((p) => p.id === 'ollama')!;
       expect(ollama.available).toBe(true);
       expect(ollama.models).toEqual([{ id: 'qwen3:latest', preferred: true }]);
+    });
+
+    it('reports ollama unavailable when the daemon does not respond', async () => {
+      const { detectProviders } = await import('#src/providers/modelDiscovery.js');
+      const providers = await detectProviders();
+      const ollama = providers.find((p) => p.id === 'ollama')!;
+      expect(ollama.available).toBe(false);
     });
 
     it('includes unavailable providers by default but can filter them out', async () => {
