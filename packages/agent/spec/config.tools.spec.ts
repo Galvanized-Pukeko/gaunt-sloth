@@ -37,6 +37,19 @@ vi.mock('#src/utils/systemUtils.js', () => ({
   getUseColour: () => false,
 }));
 
+// Mock the GthDevToolkit so dev-tool enablement is observable via a single marker tool.
+vi.mock('#src/tools/GthDevToolkit.js', () => ({
+  default: class MockGthDevToolkit {
+    devConfig: unknown;
+    constructor(devConfig: unknown) {
+      this.devConfig = devConfig;
+    }
+    getTools() {
+      return [{ name: 'run_shell_command', gthDevToolConfig: this.devConfig }];
+    }
+  },
+}));
+
 describe('Config Tool Functions', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -129,6 +142,40 @@ describe('Config Tool Functions', () => {
       expect(consoleUtilsMock.displayWarning).toHaveBeenCalledWith(
         'Unknown built-in tool: does_not_exist'
       );
+    });
+
+    it('enables dev tools for the exec command from commands.exec.devTools', async () => {
+      const result = await getDefaultTools(
+        {
+          filesystem: 'none',
+          commands: { exec: { devTools: { run_shell_command: true } } },
+        } as Partial<GthConfig> as GthConfig,
+        'exec'
+      );
+      expect(result.map((t) => t.name)).toContain('run_shell_command');
+    });
+
+    it('does NOT enable dev tools for plain ask (no --write)', async () => {
+      const result = await getDefaultTools(
+        {
+          filesystem: 'read',
+          commands: { ask: { devTools: { run_shell_command: true } } },
+        } as Partial<GthConfig> as GthConfig,
+        'ask'
+      );
+      expect(result.map((t) => t.name)).not.toContain('run_shell_command');
+    });
+
+    it('enables dev tools for ask when askWriteMode is set (ask --write)', async () => {
+      const result = await getDefaultTools(
+        {
+          filesystem: 'all',
+          askWriteMode: true,
+          commands: { ask: { devTools: { run_shell_command: true } } },
+        } as Partial<GthConfig> as GthConfig,
+        'ask'
+      );
+      expect(result.map((t) => t.name)).toContain('run_shell_command');
     });
   });
 });

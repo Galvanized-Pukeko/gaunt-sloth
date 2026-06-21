@@ -53,6 +53,7 @@ vi.mock('@gaunt-sloth/core/utils/systemUtils.js', () => systemUtilsMock);
 
 const consoleUtilsMock = {
   displayError: vi.fn(),
+  displayWarning: vi.fn(),
 };
 vi.mock('@gaunt-sloth/core/utils/consoleUtils.js', () => consoleUtilsMock);
 
@@ -191,5 +192,75 @@ describe('execCommand', () => {
     execCommand(program, {});
 
     await expect(program.parseAsync(['na', 'na', 'exec'])).rejects.toThrow('A script is required');
+  });
+
+  it('uses -m/--message inline text as the prompt instead of reading a file', async () => {
+    const { execCommand } = await import('#src/commands/execCommand.js');
+    const program = new Command();
+    execCommand(program, {});
+    await program.parseAsync(['na', 'na', 'exec', '-m', 'do the thing']);
+
+    expect(runSingleShot).toHaveBeenCalledTimes(1);
+    const [, , content, , , command] = runSingleShot.mock.calls[0];
+    expect(command).toEqual('exec');
+    expect(content).toContain('do the thing');
+    expect(content).toContain('prompt-executable script');
+    // No file path was read for the prompt itself.
+    expect(fileUtilsMock.readMultipleFilesFromProjectDir).not.toHaveBeenCalledWith(['script.md']);
+  });
+
+  it('-m wins over stdin (explicit inline text takes precedence)', async () => {
+    systemUtilsMock.getStringFromStdin.mockReturnValue('PIPED SCRIPT');
+    const { execCommand } = await import('#src/commands/execCommand.js');
+    const program = new Command();
+    execCommand(program, {});
+    await program.parseAsync(['na', 'na', 'exec', '-m', 'inline wins']);
+
+    const content = runSingleShot.mock.calls[0][2];
+    expect(content).toContain('inline wins');
+    expect(content).not.toContain('PIPED SCRIPT');
+  });
+
+  it('errors when both a [script] path and -m are given (no ambiguity)', async () => {
+    const { execCommand } = await import('#src/commands/execCommand.js');
+    const program = new Command();
+    execCommand(program, {});
+
+    await expect(
+      program.parseAsync(['na', 'na', 'exec', 'script.md', '-m', 'inline'])
+    ).rejects.toThrow('either a [script] path or -m/--message');
+  });
+
+  it('threads --allow-dir into config.allowDirs and warns loudly (repeatable)', async () => {
+    const { execCommand } = await import('#src/commands/execCommand.js');
+    const program = new Command();
+    execCommand(program, {});
+    await program.parseAsync([
+      'na',
+      'na',
+      'exec',
+      'script.md',
+      '--allow-dir',
+      '../shared',
+      '--allow-dir',
+      '/tmp/out',
+    ]);
+
+    const passedConfig = runSingleShot.mock.calls[0][3];
+    expect(passedConfig.allowDirs).toEqual(['../shared', '/tmp/out']);
+    expect(consoleUtilsMock.displayWarning).toHaveBeenCalledWith(
+      expect.stringContaining('../shared, /tmp/out')
+    );
+  });
+
+  it('does not set allowDirs when --allow-dir is absent', async () => {
+    const { execCommand } = await import('#src/commands/execCommand.js');
+    const program = new Command();
+    execCommand(program, {});
+    await program.parseAsync(['na', 'na', 'exec', 'script.md']);
+
+    const passedConfig = runSingleShot.mock.calls[0][3];
+    expect(passedConfig.allowDirs).toBeUndefined();
+    expect(consoleUtilsMock.displayWarning).not.toHaveBeenCalled();
   });
 });

@@ -144,7 +144,23 @@ export class GthDeepAgent extends GthAbstractAgent {
       `Loaded middleware: ${middleware.map((m) => m.name).join(', ')}`
     );
 
-    const backend = new FilesystemBackend({ rootDir: getCurrentWorkDir(), virtualMode: true });
+    // Default: a virtual-root sandbox anchored at cwd (absolute paths / `..` cannot escape).
+    // `--allow-dir` (config.allowDirs) opts into widening: drop virtualMode so the listed real
+    // directories are reachable, and rely on the permission allow-rules (built in
+    // buildDeepAgentParams) to constrain access to cwd + those dirs. This removes a guardrail,
+    // so it is announced loudly by the exec command and surfaced here in the status log.
+    const allowDirs = this.config?.allowDirs;
+    const widenFs = Array.isArray(allowDirs) && allowDirs.length > 0;
+    if (widenFs) {
+      this.statusUpdate(
+        StatusLevel.WARNING,
+        `Filesystem sandbox widened beyond cwd (--allow-dir): ${allowDirs.join(', ')}`
+      );
+    }
+    const backend = new FilesystemBackend({
+      rootDir: getCurrentWorkDir(),
+      virtualMode: !widenFs,
+    });
 
     this.agent = createDeepAgent({
       model: params.model,
@@ -306,10 +322,17 @@ export class GthDeepAgent extends GthAbstractAgent {
     // middleware is NOT added here (see GthDeepAgentParams.middleware); the runner appends it.
     const middleware = [fsDenialSoftening, ...configuredMiddleware];
 
-    // Map gsloth's .aiignore + filesystem mode onto deepagents permission rules.
+    // Map gsloth's .aiignore + filesystem mode onto deepagents permission rules. When
+    // `--allow-dir` widens the sandbox, the backend runs without virtualMode, so paths are REAL
+    // absolute paths: constrain read+write to cwd + the allowed dirs (everything else denied),
+    // layered under the .aiignore deny rules.
     const permissions = buildPermissions({
       filesystem: this.config.filesystem,
       aiignore: this.config.aiignore,
+      allowDirs:
+        Array.isArray(this.config.allowDirs) && this.config.allowDirs.length > 0
+          ? this.config.allowDirs
+          : undefined,
     });
     debugLogObject('Filesystem permissions', permissions);
 

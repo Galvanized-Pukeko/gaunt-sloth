@@ -76,6 +76,10 @@ vi.mock('@gaunt-sloth/core/runtime/singleShot.js', () => singleShotModule);
 vi.mock('#src/utils/systemUtils.js', () => ({
   getStringFromStdin: vi.fn().mockReturnValue(''),
 }));
+const consoleUtilsMock = {
+  displayWarning: vi.fn(),
+};
+vi.mock('@gaunt-sloth/core/utils/consoleUtils.js', () => consoleUtilsMock);
 const configMock = {
   initConfig: vi.fn(),
   createDefaultConfig: vi.fn(),
@@ -246,5 +250,61 @@ describe('askCommand', () => {
     // Specifically verify the writeOutputToFile parameter was passed through
     const calledConfig = runSingleShot.mock.calls[0][3];
     expect(calledConfig.writeOutputToFile).toBe(false);
+  });
+
+  it('applyAskWriteMode returns config untouched without --write', async () => {
+    const { applyAskWriteMode } = await import('#src/commands/askCommand.js');
+    const cfg = { ...mockConfig, commands: { ask: { filesystem: 'read' } } } as any;
+    const result = applyAskWriteMode(cfg, {});
+    expect(result).toBe(cfg);
+    expect(result.askWriteMode).toBeUndefined();
+    expect(consoleUtilsMock.displayWarning).not.toHaveBeenCalled();
+  });
+
+  it('applyAskWriteMode upgrades filesystem to all, sets askWriteMode, warns, and inherits exec devTools', async () => {
+    const { applyAskWriteMode } = await import('#src/commands/askCommand.js');
+    const cfg = {
+      ...mockConfig,
+      commands: {
+        ask: { filesystem: 'read' },
+        exec: { devTools: { run_shell_command: true } },
+      },
+    } as any;
+    const result = applyAskWriteMode(cfg, { write: true });
+
+    expect(result.askWriteMode).toBe(true);
+    expect(result.commands.ask.filesystem).toBe('all');
+    // Dev tools are inherited from commands.exec so the user need not configure commands.ask.devTools.
+    expect(result.commands.ask.devTools).toEqual({ run_shell_command: true });
+    expect(consoleUtilsMock.displayWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it('applyAskWriteMode falls back to code devTools when exec has none', async () => {
+    const { applyAskWriteMode } = await import('#src/commands/askCommand.js');
+    const cfg = {
+      ...mockConfig,
+      commands: {
+        ask: { filesystem: 'read' },
+        code: { devTools: { run_shell_command: true } },
+      },
+    } as any;
+    const result = applyAskWriteMode(cfg, { write: true });
+    expect(result.commands.ask.devTools).toEqual({ run_shell_command: true });
+  });
+
+  it('ask --write passes the write-enabled config (filesystem all + askWriteMode) to runSingleShot', async () => {
+    configMock.initConfig.mockResolvedValue({
+      ...mockConfig,
+      commands: { ask: { filesystem: 'read' }, exec: { devTools: { run_shell_command: true } } },
+    });
+    const { askCommand } = await import('#src/commands/askCommand.js');
+    const program = new Command();
+    askCommand(program, {});
+    await program.parseAsync(['na', 'na', 'ask', '--write', 'create test.txt']);
+
+    const calledConfig = runSingleShot.mock.calls[0][3];
+    expect(calledConfig.askWriteMode).toBe(true);
+    expect(calledConfig.commands.ask.filesystem).toBe('all');
+    expect(calledConfig.commands.ask.devTools).toEqual({ run_shell_command: true });
   });
 });

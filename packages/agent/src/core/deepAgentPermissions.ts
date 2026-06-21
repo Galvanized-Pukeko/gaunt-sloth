@@ -1,4 +1,6 @@
 import type { FilesystemPermission } from 'deepagents';
+import path from 'node:path';
+import { getCurrentWorkDir } from '@gaunt-sloth/core/utils/systemUtils.js';
 
 export type { FilesystemPermission };
 
@@ -23,6 +25,31 @@ export const FILESYSTEM_TOOL_NAMES = [
 export interface PermissionConfigSlice {
   filesystem: string[] | 'all' | 'read' | 'none';
   aiignore?: { enabled?: boolean; patterns?: string[] };
+  /**
+   * Extra real filesystem roots to allow (`gth exec --allow-dir`). When present, the backend runs
+   * WITHOUT virtualMode, so permission paths are real absolute paths: access is allow-listed to
+   * cwd + these dirs and everything else is denied. Undefined/empty keeps the cwd-only sandbox.
+   */
+  allowDirs?: string[];
+}
+
+/**
+ * Build allow+deny rules for the widened (`--allow-dir`) sandbox. Because the backend runs
+ * without virtualMode, paths are REAL absolute paths, so we anchor allow rules at the resolved
+ * absolute cwd and each allowed dir, then deny everything else. First-match-wins, so the allow
+ * rules must come before the catch-all deny.
+ */
+export function allowDirsToPermissions(allowDirs: string[]): FilesystemPermission[] {
+  const cwd = getCurrentWorkDir();
+  const roots = [cwd, ...allowDirs.map((d) => path.resolve(cwd, d))];
+  // De-dupe resolved roots (e.g. an --allow-dir pointing back at cwd).
+  const uniqueRoots = Array.from(new Set(roots));
+  const allow: FilesystemPermission[] = uniqueRoots.map((root) => ({
+    operations: ['read', 'write'],
+    paths: [`${root}/**`, root],
+    mode: 'allow',
+  }));
+  return [...allow, { operations: ['read', 'write'], paths: ['/**'], mode: 'deny' }];
 }
 
 /**
@@ -50,15 +77,19 @@ function normalizePathFragment(p: string): string {
  * A bare pattern (`*.env`, `secret.txt`) should match at any depth, so we emit both a
  * top-level (`/secret.txt`) and a recursive (`/&#42;&#42;/secret.txt`) rule. A pattern already
  * containing "/" (`config/secrets.json`) is anchored as-is (plus a `/**` subtree rule).
+ *
+ * `base` defaults to "" so paths are anchored at the virtual root "/". When the sandbox is
+ * widened (`--allow-dir`, no virtualMode) the backend uses REAL absolute paths, so the caller
+ * passes the absolute cwd as `base` to anchor these deny rules there.
  */
-export function aiignoreToPermissions(patterns: string[]): FilesystemPermission[] {
+export function aiignoreToPermissions(patterns: string[], base = ''): FilesystemPermission[] {
   const rules: FilesystemPermission[] = [];
   for (const raw of patterns) {
     const clean = normalizePathFragment(raw);
     if (clean.length === 0) continue;
     const paths = clean.includes('/')
-      ? [`/${clean}`, `/${clean}/**`]
-      : [`/${clean}`, `/**/${clean}`];
+      ? [`${base}/${clean}`, `${base}/${clean}/**`]
+      : [`${base}/${clean}`, `${base}/**/${clean}`];
     rules.push({ operations: ['read', 'write'], paths, mode: 'deny' });
   }
   return rules;
@@ -88,9 +119,17 @@ export function filesystemModeToPermissions(
  * skipped when explicitly disabled (`aiignore.enabled === false`) or has no patterns.
  */
 export function buildPermissions(config: PermissionConfigSlice): FilesystemPermission[] {
-  const aiignore =
-    config.aiignore?.enabled !== false && config.aiignore?.patterns?.length
-      ? aiignoreToPermissions(config.aiignore.patterns)
-      : [];
-  return [...aiignore, ...filesystemModeToPermissions(config.filesystem)];
+  const widen = Array.isArray(config.allowDirs) && config.allowDirs.length > 0;
+  const aiignoreEnabled = config.aiignore?.enabled !== false && !!config.aiignore?.patterns?.length;
+  // When widening, the backend uses real absolute paths — anchor aiignore deny rules at the
+  // absolute cwd so they keep matching project-relative ignore patterns.
+  const aiignore = aiignoreEnabled
+    ? aiignoreToPermissions(config.aiignore!.patterns!, widen ? getCurrentWorkDir() : '')
+    : [];
+  // `--allow-dir` replaces the filesystem-mode rules with the cwd + allowed-dirs allow-list,
+  // since the model now sees real absolute paths rather than virtual ones.
+  const modeRules = widen
+    ? allowDirsToPermissions(config.allowDirs!)
+    : filesystemModeToPermissions(config.filesystem);
+  return [...aiignore, ...modeRules];
 }

@@ -46,9 +46,16 @@ export async function getDefaultTools(
   const builtInTools = await getBuiltInTools(config);
   // Dev tools (run commands etc.) are available to the interactive `code` command and to the
   // scripted `exec` command — both are "do-the-job" runs — each via its own per-command config.
+  // `ask --write` (config.askWriteMode) opts `ask` into the same do-the-job tools, reusing the
+  // devTools config the --write flag copied onto commands.ask.
+  const askWrite = command === 'ask' && config.askWriteMode === true;
   const devToolConfig =
-    command === 'exec' ? config.commands?.exec?.devTools : config.commands?.code?.devTools;
-  const devTools = await filterDevTools(command, devToolConfig);
+    command === 'exec'
+      ? config.commands?.exec?.devTools
+      : askWrite
+        ? config.commands?.ask?.devTools
+        : config.commands?.code?.devTools;
+  const devTools = await filterDevTools(askWrite ? 'code' : command, devToolConfig);
   const customTools = getCustomTools(config, command);
   return [...filesystemTools, ...devTools, ...customTools, ...builtInTools];
 }

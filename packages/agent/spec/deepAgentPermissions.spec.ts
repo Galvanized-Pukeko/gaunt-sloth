@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Anchor getCurrentWorkDir deterministically for the --allow-dir (real-path) permission tests.
+vi.mock('@gaunt-sloth/core/utils/systemUtils.js', () => ({
+  getCurrentWorkDir: () => '/work/proj',
+}));
+
 import {
   aiignoreToPermissions,
+  allowDirsToPermissions,
   buildPermissions,
   filesystemModeToPermissions,
   FILESYSTEM_TOOL_NAMES,
@@ -38,6 +45,41 @@ describe('deepAgentPermissions', () => {
         ['/build', '/**/build'],
         ['/dist', '/**/dist'],
       ]);
+    });
+
+    it('anchors rules at an absolute base when one is supplied (widened real-path mode)', () => {
+      const rules = aiignoreToPermissions(['*.env'], '/work/proj');
+      expect(rules).toEqual([
+        {
+          operations: ['read', 'write'],
+          paths: ['/work/proj/*.env', '/work/proj/**/*.env'],
+          mode: 'deny',
+        },
+      ]);
+    });
+  });
+
+  describe('allowDirsToPermissions', () => {
+    it('allow-lists cwd + each (resolved) extra dir, then denies everything else', () => {
+      const rules = allowDirsToPermissions(['../shared', '/tmp/out']);
+      expect(rules).toEqual([
+        { operations: ['read', 'write'], paths: ['/work/proj/**', '/work/proj'], mode: 'allow' },
+        {
+          operations: ['read', 'write'],
+          paths: ['/work/shared/**', '/work/shared'],
+          mode: 'allow',
+        },
+        { operations: ['read', 'write'], paths: ['/tmp/out/**', '/tmp/out'], mode: 'allow' },
+        { operations: ['read', 'write'], paths: ['/**'], mode: 'deny' },
+      ]);
+    });
+
+    it('de-dupes a dir that resolves back to cwd', () => {
+      const rules = allowDirsToPermissions(['.']);
+      // Only one allow rule (cwd) plus the catch-all deny.
+      expect(rules).toHaveLength(2);
+      expect(rules[0].paths).toEqual(['/work/proj/**', '/work/proj']);
+      expect(rules[1].mode).toEqual('deny');
     });
   });
 
@@ -107,6 +149,34 @@ describe('deepAgentPermissions', () => {
     it('skips .aiignore when there are no patterns or no aiignore block', () => {
       expect(buildPermissions({ filesystem: 'all' })).toEqual([]);
       expect(buildPermissions({ filesystem: 'all', aiignore: { patterns: [] } })).toEqual([]);
+    });
+
+    it('allowDirs replaces filesystem-mode rules with the cwd + dirs allow-list (real paths)', () => {
+      const rules = buildPermissions({ filesystem: 'all', allowDirs: ['/tmp/out'] });
+      expect(rules).toEqual([
+        { operations: ['read', 'write'], paths: ['/work/proj/**', '/work/proj'], mode: 'allow' },
+        { operations: ['read', 'write'], paths: ['/tmp/out/**', '/tmp/out'], mode: 'allow' },
+        { operations: ['read', 'write'], paths: ['/**'], mode: 'deny' },
+      ]);
+    });
+
+    it('with allowDirs, .aiignore deny rules are anchored at the absolute cwd and come first', () => {
+      const rules = buildPermissions({
+        filesystem: 'all',
+        allowDirs: ['/tmp/out'],
+        aiignore: { enabled: true, patterns: ['*.env'] },
+      });
+      expect(rules[0]).toEqual({
+        operations: ['read', 'write'],
+        paths: ['/work/proj/*.env', '/work/proj/**/*.env'],
+        mode: 'deny',
+      });
+      // allow-list follows, catch-all deny last.
+      expect(rules[rules.length - 1]).toEqual({
+        operations: ['read', 'write'],
+        paths: ['/**'],
+        mode: 'deny',
+      });
     });
   });
 
