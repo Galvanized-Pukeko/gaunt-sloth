@@ -19,23 +19,21 @@ describe('Standalone @gaunt-sloth/review integration test', () => {
 
     const rootDir = path.resolve('.');
 
-    // Pack both core and review tarballs directly into the temp directory
-    spawnSync(
-      'npm',
-      [
-        'pack',
-        '--pack-destination',
-        tempDir,
-        '-w',
-        '@gaunt-sloth/core',
-        '-w',
-        '@gaunt-sloth/review',
-      ],
-      {
-        cwd: rootDir,
+    // Pack both core and review tarballs directly into the temp directory.
+    // Pack each package from its own dir with `pnpm pack` (not `npm pack -w`):
+    // the repo moved to pnpm workspaces (no npm `workspaces` field in the root
+    // package.json, so `npm pack -w` finds nothing), and `pnpm pack` also
+    // rewrites review's `@gaunt-sloth/core: workspace:*` dependency to a concrete
+    // version so the tarball installs cleanly outside the workspace.
+    for (const pkg of ['core', 'review']) {
+      const packResult = spawnSync('pnpm', ['pack', '--pack-destination', tempDir], {
+        cwd: path.join(rootDir, 'packages', pkg),
         stdio: 'pipe',
+      });
+      if (packResult.status !== 0) {
+        throw new Error(`Command failed: pnpm pack (${pkg})\n${packResult.stderr}`);
       }
-    );
+    }
 
     // Initialize a fresh package.json in the temp directory
     spawnSync('npm', ['init', '-y'], { cwd: tempDir, stdio: 'pipe' });
