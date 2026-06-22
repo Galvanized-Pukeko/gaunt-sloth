@@ -54,9 +54,14 @@ export async function createInteractiveSession(
 
     // Tool-approval (human-in-the-loop) prompt for gated tools — currently the opt-in
     // `run_shell_command`. When a run suspends on such a tool call, the runner calls this with
-    // the pending command; a simple readline y/n confirm gates execution. Anything other than an
-    // explicit "y"/"yes" rejects (fail-closed). The model gets a tool-rejected message on reject
-    // and continues. (The Ink TUI path does not yet surface this prompt — see EXT-9 report.)
+    // the pending command. EXT-9 Tier-2: instead of a bare y/N, offer a scoped choice so the
+    // human can stop re-prompting for an operation they trust:
+    //   [o]nce    — approve this single invocation only (persists nothing),
+    //   [s]ession — auto-approve this command's classified prefix for the rest of the session,
+    //   [a]lways  — additionally persist it to the project allow-list,
+    //   anything else → reject (fail-closed).
+    // The runner consults the allow-list BEFORE calling this, so trusted commands never reach
+    // this prompt at all. (The Ink TUI path does not yet surface this prompt — see EXT-9 report.)
     runner.setToolApprovalCallback(async (pending) => {
       const commandText =
         typeof pending.args.command === 'string'
@@ -65,14 +70,24 @@ export async function createInteractiveSession(
       displayWarning(`\nThe agent wants to run a shell command via ${pending.name}:`);
       display(`\n    ${commandText}\n`);
       setRawMode(false); // ensure typed input is echoed for this confirm
-      const answer = await rl.question(formatInputPrompt('Run this command? (y/N): '));
-      const approved = answer.trim().toLowerCase().startsWith('y');
-      if (!approved) {
-        displayInfo('Command rejected.');
+      const answer = (
+        await rl.question(formatInputPrompt('Approve? [o]nce / [s]ession / [a]lways / [N]o: '))
+      )
+        .trim()
+        .toLowerCase();
+      if (answer === 'o' || answer === 'once') {
+        return { type: 'approve', scope: 'once' };
       }
-      return approved
-        ? { type: 'approve' }
-        : { type: 'reject', message: 'User rejected the shell command.' };
+      if (answer === 's' || answer === 'session') {
+        displayInfo('Approved for this session — future variants will not re-prompt.');
+        return { type: 'approve', scope: 'session' };
+      }
+      if (answer === 'a' || answer === 'always') {
+        displayInfo('Approved and remembered — saved to the project allow-list.');
+        return { type: 'approve', scope: 'always' };
+      }
+      displayInfo('Command rejected.');
+      return { type: 'reject', message: 'User rejected the shell command.' };
     });
 
     if (logFileName) {

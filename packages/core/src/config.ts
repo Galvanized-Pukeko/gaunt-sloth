@@ -16,6 +16,7 @@ import {
   USER_PROJECT_CONFIG_MJS,
 } from '#src/constants.js';
 import { StatusLevel } from '#src/core/types.js';
+import type { GthCommand } from '#src/core/types.js';
 import {
   displayDebug,
   displayError,
@@ -545,8 +546,25 @@ export interface GthDevToolsConfig {
    *
    * Example: `{ "shell": true }`,
    * `{ "shell": { "enabled": true, "timeout": 300000, "maxOutputBytes": 200000 } }`.
+   *
+   * The object form additionally accepts EXT-9 Tier-2 allow-list knobs:
+   * - `allowlist`: master switch for the scoped approval allow-list (session +
+   *   persisted `always`). Default `true` — once a command is approved at `session`/
+   *   `always` scope, flag-variants of the same classified operation auto-approve
+   *   without re-prompting. Set `false` to require fresh approval for every command.
+   * - `persistAllowlist`: whether `always`-scoped approvals are written to the project
+   *   allow-list file (`.gsloth/.gsloth-settings/shell-allowlist.json`). Default `true`.
+   *   When `false`, an `always` decision behaves like `session` (in-memory only).
    */
-  shell?: boolean | { enabled?: boolean; timeout?: number; maxOutputBytes?: number };
+  shell?:
+    | boolean
+    | {
+        enabled?: boolean;
+        timeout?: number;
+        maxOutputBytes?: number;
+        allowlist?: boolean;
+        persistAllowlist?: boolean;
+      };
   /**
    * Opt-out of the per-command confirmation dialog for {@link shell}
    * (`run_shell_command`) — the explicit "yolo" bypass. When `true` AND `shell`
@@ -610,6 +628,48 @@ export function getShellMaxOutputBytes(devTools: GthDevToolsConfig | undefined):
     }
   }
   return SHELL_DEFAULT_MAX_OUTPUT_BYTES;
+}
+
+/**
+ * Whether the EXT-9 Tier-2 scoped allow-list is active. Default `true`; only the object
+ * form's `allowlist: false` disables it (a bare `shell: true` keeps it on). When off, the
+ * runner prompts for every `run_shell_command` regardless of prior approvals.
+ */
+export function isShellAllowlistEnabled(devTools: GthDevToolsConfig | undefined): boolean {
+  const shell = devTools?.shell;
+  if (shell && typeof shell === 'object' && shell.allowlist === false) return false;
+  return true;
+}
+
+/**
+ * Whether `always`-scoped approvals are persisted to the project allow-list file. Default
+ * `true`; only the object form's `persistAllowlist: false` disables persistence (an
+ * `always` decision then behaves as `session`).
+ */
+export function isShellAllowlistPersisted(devTools: GthDevToolsConfig | undefined): boolean {
+  const shell = devTools?.shell;
+  if (shell && typeof shell === 'object' && shell.persistAllowlist === false) return false;
+  return true;
+}
+
+/**
+ * Resolve the {@link GthDevToolsConfig} that applies to the active command, mirroring the
+ * per-command selection in `builtInToolsConfig.getDefaultTools` (which is what actually emits
+ * the dev tools) and `GthDeepAgent.getEffectiveDevToolsConfig`: `exec` → `commands.exec`,
+ * `ask --write` → `commands.ask`, `code` → `commands.code`; `undefined` elsewhere (the
+ * toolkit is inert there). Shared in core so the runner's allow-list gate stays in lockstep
+ * with where the shell tool is actually emitted.
+ */
+export function getEffectiveDevToolsConfig(
+  config: Pick<GthConfig, 'commands' | 'askWriteMode'> | undefined,
+  command: GthCommand | undefined
+): GthDevToolsConfig | undefined {
+  if (!config) return undefined;
+  const askWrite = command === 'ask' && config.askWriteMode === true;
+  if (command === 'exec') return config.commands?.exec?.devTools;
+  if (askWrite) return config.commands?.ask?.devTools;
+  if (command === 'code') return config.commands?.code?.devTools;
+  return undefined;
 }
 
 export interface LLMConfig extends Record<string, unknown> {

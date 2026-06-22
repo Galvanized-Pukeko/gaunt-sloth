@@ -75,10 +75,26 @@ export interface PendingToolInterrupt {
 }
 
 /**
+ * Persistence scope for an `approve` decision (EXT-9 Tier-2 allow-list ergonomics):
+ * - `once`    — run this single invocation only; remember nothing (the default).
+ * - `session` — remember the command's classified prefix for the life of this runner
+ *   instance, so flag-variants of the same operation auto-approve without re-prompting.
+ * - `always`  — additionally persist the prefix to the project allow-list
+ *   (`.gsloth/.gsloth-settings/shell-allowlist.json`) so it survives across runs.
+ */
+export type ToolApprovalScope = 'once' | 'session' | 'always';
+
+/**
  * A consumer-supplied decision on a {@link PendingToolInterrupt}: approve runs the tool,
  * reject feeds the model a tool-rejected message (with the optional reason).
+ *
+ * `approve` carries an optional {@link ToolApprovalScope}; when absent it means `once`
+ * (backward compatible — a bare `{ type: 'approve' }` still type-checks and behaves as
+ * a single-shot approval that persists nothing).
  */
-export type ToolApprovalDecision = { type: 'approve' } | { type: 'reject'; message?: string };
+export type ToolApprovalDecision =
+  | { type: 'approve'; scope?: ToolApprovalScope }
+  | { type: 'reject'; message?: string };
 
 /**
  * Callback the {@link GthAgentRunner} invokes when a run suspends on a tool-approval

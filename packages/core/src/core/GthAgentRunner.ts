@@ -1,4 +1,9 @@
-import { GthConfig } from '#src/config.js';
+import {
+  GthConfig,
+  getEffectiveDevToolsConfig,
+  isShellAllowlistEnabled,
+  isShellAllowlistPersisted,
+} from '#src/config.js';
 import { BaseCheckpointSaver } from '@langchain/langgraph';
 import {
   AgentResolvers,
@@ -7,11 +12,22 @@ import {
   GthAgentInterface,
   GthCommand,
   Message,
+  PendingToolInterrupt,
   StatusUpdateCallback,
   ToolApprovalCallback,
   ToolApprovalDecision,
 } from '#src/core/types.js';
 import { GthLangChainAgent } from '#src/core/GthLangChainAgent.js';
+import {
+  AllowlistStore,
+  PersistedAllowlist,
+  matchesApproval,
+  type ApprovalScope,
+} from '#src/core/shell/allowlist.js';
+import { classifyCommand } from '#src/core/shell/arity.js';
+import { normalizeCommand } from '#src/core/shell/normalize.js';
+import { getGslothConfigWritePath } from '#src/utils/fileUtils.js';
+import { SHELL_ALLOWLIST_FILE } from '#src/constants.js';
 import { enhanceVertexUnauthorizedMessage } from '#src/utils/vertexaiUtils.js';
 import { RunnableConfig } from '@langchain/core/runnables';
 import { getNewRunnableConfig } from '#src/utils/llmUtils.js';
@@ -40,6 +56,24 @@ export class GthAgentRunner {
    * for non-interactive entrypoints (a scripted `exec` run with no TTY to prompt on).
    */
   private toolApprovalCallback: ToolApprovalCallback | null = null;
+
+  /** The command the runner was initialized for; selects which `devTools` config applies. */
+  private command: GthCommand | undefined = undefined;
+
+  /**
+   * EXT-9 Tier-2 session allow-list — approved command prefixes that auto-approve for the
+   * life of THIS runner instance. Instance-scoped (not module-global) so concurrent
+   * sessions (ACP / AG-UI multi-session) cannot stomp each other's approvals.
+   */
+  private readonly sessionAllowlist = new AllowlistStore();
+
+  /**
+   * EXT-9 Tier-2 persisted (`always`) allow-list, loaded lazily on first use from
+   * `.gsloth/.gsloth-settings/shell-allowlist.json`. Null until the shell tool is gated
+   * and the allow-list is enabled; null also when persistence is disabled by config.
+   */
+  private persistedAllowlist: PersistedAllowlist | null = null;
+  private persistedAllowlistLoaded = false;
 
   /**
    * @param agentFactory Produces the {@link GthAgentInterface} the runner drives.
@@ -78,6 +112,7 @@ export class GthAgentRunner {
     checkpointSaver?: BaseCheckpointSaver | undefined
   ): Promise<void> {
     this.config = configIn;
+    this.command = command;
 
     // Initialize debug logging
     initDebugLogging(configIn.debugLog ?? false);
@@ -203,21 +238,109 @@ export class GthAgentRunner {
 
       const decisions: ToolApprovalDecision[] = [];
       for (const tool of pending) {
-        if (this.toolApprovalCallback) {
-          decisions.push(await this.toolApprovalCallback(tool));
-        } else {
-          // No interactive handler (e.g. non-TTY exec run): reject rather than auto-approve.
-          decisions.push({
-            type: 'reject',
-            message: 'Tool call rejected: no interactive approval handler available.',
-          });
-        }
+        decisions.push(await this.decideToolApproval(tool));
       }
 
       const stream = await agent.streamResume({ decisions }, runConfig);
       resumedText += await this.drainTextStream(stream);
     }
     return resumedText;
+  }
+
+  /**
+   * Decide a single pending tool call (EXT-9 Tier-2). For the opt-in `run_shell_command`,
+   * consult the scoped allow-list FIRST: if the command's classified prefix is already
+   * approved (session or persisted `always`) and survives the safe-bin anti-widening
+   * re-validation, auto-approve SILENTLY (no human prompt). Otherwise fall through to the
+   * human callback; when the human grants `session`/`always` scope, record the command's
+   * classified prefix into the matching store so future flag-variants stop re-prompting.
+   *
+   * When no human callback is wired (non-TTY exec run) and nothing is allow-listed, reject —
+   * never auto-approve. Non-shell tools (or any tool when the allow-list is disabled) skip the
+   * allow-list and go straight to the human callback / default-reject, preserving prior behaviour.
+   *
+   * Hardline catastrophic commands remain refused at exec time regardless of any approval here
+   * (defense in depth in `GthDevToolkit.executeCommand`), so an allow-listed `rm -rf /` still
+   * cannot run.
+   */
+  private async decideToolApproval(tool: PendingToolInterrupt): Promise<ToolApprovalDecision> {
+    const command = typeof tool.args?.command === 'string' ? (tool.args.command as string) : null;
+    const allowlistApplies =
+      tool.name === 'run_shell_command' && command !== null && this.isShellAllowlistOn();
+
+    // Auto-approve from the allow-list without prompting.
+    if (allowlistApplies && this.isApprovedByAllowlist(command)) {
+      return { type: 'approve', scope: 'session' };
+    }
+
+    if (!this.toolApprovalCallback) {
+      // No interactive handler (e.g. non-TTY exec run): reject rather than auto-approve.
+      return {
+        type: 'reject',
+        message: 'Tool call rejected: no interactive approval handler available.',
+      };
+    }
+
+    const decision = await this.toolApprovalCallback(tool);
+
+    // Persist the human's scoped grant so future variants of the same operation skip the prompt.
+    if (decision.type === 'approve' && allowlistApplies && command) {
+      this.recordApproval(command, decision.scope ?? 'once');
+    }
+    return decision;
+  }
+
+  /** Whether the EXT-9 Tier-2 allow-list is enabled for the active command's devTools config. */
+  private isShellAllowlistOn(): boolean {
+    const devTools = getEffectiveDevToolsConfig(this.config ?? undefined, this.command);
+    return isShellAllowlistEnabled(devTools);
+  }
+
+  /**
+   * Lazily load (once per instance) the persisted `always` allow-list, unless persistence is
+   * disabled by config. Returns null when persistence is off so `always` grants behave as
+   * `session` (in-memory only).
+   */
+  private getPersistedAllowlist(): PersistedAllowlist | null {
+    if (this.persistedAllowlistLoaded) return this.persistedAllowlist;
+    this.persistedAllowlistLoaded = true;
+    const devTools = getEffectiveDevToolsConfig(this.config ?? undefined, this.command);
+    if (!isShellAllowlistPersisted(devTools)) {
+      this.persistedAllowlist = null;
+      return null;
+    }
+    try {
+      const filePath = getGslothConfigWritePath(SHELL_ALLOWLIST_FILE);
+      this.persistedAllowlist = new PersistedAllowlist(filePath);
+    } catch (e) {
+      // Path/IO failure → behave as no persisted store (still safe: just prompts more).
+      debugLogError('Loading persisted shell allow-list', e);
+      this.persistedAllowlist = null;
+    }
+    return this.persistedAllowlist;
+  }
+
+  /** Check the command against the session + persisted stores (with anti-widening re-validation). */
+  private isApprovedByAllowlist(command: string): boolean {
+    return matchesApproval(command, {
+      session: this.sessionAllowlist,
+      always: this.getPersistedAllowlist() ?? undefined,
+    });
+  }
+
+  /**
+   * Record a human-granted approval at the given scope. `once` persists nothing. `session`
+   * adds the classified prefix to the in-memory store. `always` additionally persists it (or
+   * falls back to session-only when persistence is disabled).
+   */
+  private recordApproval(command: string, scope: ApprovalScope): void {
+    if (scope === 'once') return;
+    const classification = classifyCommand(command, normalizeCommand);
+    if (!classification) return; // unclassifiable (composition/redirection) → never remember.
+    this.sessionAllowlist.add(classification.prefix);
+    if (scope === 'always') {
+      this.getPersistedAllowlist()?.add(classification.prefix);
+    }
   }
 
   /**

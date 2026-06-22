@@ -339,6 +339,140 @@ describe('GthAgentRunner', () => {
       expect(resumeArg.decisions[0].type).toBe('reject');
     });
 
+    // EXT-9 Tier-2: session-scoped allow-list config (persistence off so no disk writes).
+    const ALLOWLIST_CONFIG = {
+      streamOutput: true as const,
+      commands: { code: { devTools: { shell: { enabled: true, persistAllowlist: false } } } },
+    };
+
+    it('records a session-scoped approval, then auto-approves a variant without re-prompting', async () => {
+      const runner = new GthAgentRunner(statusUpdateCallback);
+      mockAgent.stream.mockResolvedValue(streamOf('first'));
+      // Two suspends: first on `git checkout main`, then (after resume) on `git checkout -b x`.
+      (mockAgent as any).getPendingToolInterrupts = vi
+        .fn()
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout main' } },
+        ])
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout -b x' } },
+        ])
+        .mockResolvedValueOnce([]);
+      (mockAgent as any).streamResume = vi.fn().mockResolvedValue(streamOf(''));
+
+      await runner.init('code', { ...mockConfig, ...ALLOWLIST_CONFIG });
+      // Human grants 'session' on the first command only.
+      const human = vi.fn().mockResolvedValue({ type: 'approve', scope: 'session' });
+      runner.setToolApprovalCallback(human);
+
+      await runner.processMessages([new HumanMessage('checkout')]);
+
+      // Human prompted ONCE (first command); the variant auto-approved from the allow-list.
+      expect(human).toHaveBeenCalledTimes(1);
+      expect(human).toHaveBeenCalledWith({
+        name: 'run_shell_command',
+        args: { command: 'git checkout main' },
+      });
+    });
+
+    it('prompts the human for a non-matching command', async () => {
+      const runner = new GthAgentRunner(statusUpdateCallback);
+      mockAgent.stream.mockResolvedValue(streamOf('x'));
+      (mockAgent as any).getPendingToolInterrupts = vi
+        .fn()
+        .mockResolvedValueOnce([{ name: 'run_shell_command', args: { command: 'npm install' } }])
+        .mockResolvedValueOnce([]);
+      (mockAgent as any).streamResume = vi.fn().mockResolvedValue(streamOf(''));
+
+      await runner.init('code', { ...mockConfig, ...ALLOWLIST_CONFIG });
+      const human = vi.fn().mockResolvedValue({ type: 'approve', scope: 'once' });
+      runner.setToolApprovalCallback(human);
+
+      await runner.processMessages([new HumanMessage('install')]);
+      expect(human).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT auto-approve a composed command sharing an approved prefix (injection guard)', async () => {
+      const runner = new GthAgentRunner(statusUpdateCallback);
+      mockAgent.stream.mockResolvedValue(streamOf('x'));
+      (mockAgent as any).getPendingToolInterrupts = vi
+        .fn()
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout main' } },
+        ])
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout x; rm -rf /' } },
+        ])
+        .mockResolvedValueOnce([]);
+      (mockAgent as any).streamResume = vi.fn().mockResolvedValue(streamOf(''));
+
+      await runner.init('code', { ...mockConfig, ...ALLOWLIST_CONFIG });
+      const human = vi.fn().mockResolvedValue({ type: 'approve', scope: 'session' });
+      runner.setToolApprovalCallback(human);
+
+      await runner.processMessages([new HumanMessage('go')]);
+      // First command prompts + records 'git checkout'. The injected second command must NOT
+      // auto-match, so the human is prompted AGAIN (twice total).
+      expect(human).toHaveBeenCalledTimes(2);
+    });
+
+    it('a fresh runner instance does not see another instance session approvals', async () => {
+      // Instance A approves at session scope.
+      const runnerA = new GthAgentRunner(statusUpdateCallback);
+      mockAgent.stream.mockResolvedValue(streamOf('a'));
+      (mockAgent as any).getPendingToolInterrupts = vi
+        .fn()
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout main' } },
+        ])
+        .mockResolvedValueOnce([]);
+      (mockAgent as any).streamResume = vi.fn().mockResolvedValue(streamOf(''));
+      await runnerA.init('code', { ...mockConfig, ...ALLOWLIST_CONFIG });
+      runnerA.setToolApprovalCallback(
+        vi.fn().mockResolvedValue({ type: 'approve', scope: 'session' })
+      );
+      await runnerA.processMessages([new HumanMessage('a')]);
+
+      // Instance B (fresh session store) must still prompt for the same command.
+      const runnerB = new GthAgentRunner(statusUpdateCallback);
+      mockAgent.stream.mockResolvedValue(streamOf('b'));
+      (mockAgent as any).getPendingToolInterrupts = vi
+        .fn()
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout main' } },
+        ])
+        .mockResolvedValueOnce([]);
+      (mockAgent as any).streamResume = vi.fn().mockResolvedValue(streamOf(''));
+      await runnerB.init('code', { ...mockConfig, ...ALLOWLIST_CONFIG });
+      const humanB = vi.fn().mockResolvedValue({ type: 'approve', scope: 'once' });
+      runnerB.setToolApprovalCallback(humanB);
+      await runnerB.processMessages([new HumanMessage('b')]);
+      expect(humanB).toHaveBeenCalledTimes(1);
+    });
+
+    it('once-scoped approval persists nothing (re-prompts next time)', async () => {
+      const runner = new GthAgentRunner(statusUpdateCallback);
+      mockAgent.stream.mockResolvedValue(streamOf('x'));
+      (mockAgent as any).getPendingToolInterrupts = vi
+        .fn()
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout main' } },
+        ])
+        .mockResolvedValueOnce([
+          { name: 'run_shell_command', args: { command: 'git checkout dev' } },
+        ])
+        .mockResolvedValueOnce([]);
+      (mockAgent as any).streamResume = vi.fn().mockResolvedValue(streamOf(''));
+
+      await runner.init('code', { ...mockConfig, ...ALLOWLIST_CONFIG });
+      const human = vi.fn().mockResolvedValue({ type: 'approve', scope: 'once' });
+      runner.setToolApprovalCallback(human);
+
+      await runner.processMessages([new HumanMessage('go')]);
+      // 'once' remembers nothing → both commands prompt.
+      expect(human).toHaveBeenCalledTimes(2);
+    });
+
     it('does not attempt interrupt resolution when the agent lacks getState support', async () => {
       const runner = new GthAgentRunner(statusUpdateCallback);
       mockAgent.stream.mockResolvedValue(streamOf('hello'));
