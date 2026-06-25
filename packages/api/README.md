@@ -1,5 +1,11 @@
 # @gaunt-sloth/api
 
+> ⚠️ **Deprecated.** This package is part of the `gaunt-sloth-assistant` 1.x line, which has been
+> renamed to [`gaunt-sloth`](https://www.npmjs.com/package/gaunt-sloth). In v2 it is superseded by
+> [`@gaunt-sloth/agent`](https://www.npmjs.com/package/@gaunt-sloth/agent); this package will
+> receive no further updates.
+> Site & docs: <https://gauntsloth.app> · Source: <https://github.com/pukeko-robotics/gaunt-sloth>
+
 API server and agent integration layer for Gaunt Sloth.
 
 ## Contents

@@ -1,5 +1,10 @@
 # @gaunt-sloth/tools
 
+> ⚠️ **Deprecated.** This package is part of the `gaunt-sloth-assistant` 1.x line, which has been
+> renamed to [`gaunt-sloth`](https://www.npmjs.com/package/gaunt-sloth). It is not carried forward
+> into v2 and will receive no further updates.
+> Site & docs: <https://gauntsloth.app> · Source: <https://github.com/pukeko-robotics/gaunt-sloth>
+
 Tools and middleware for Gaunt Sloth.
 
 ## Contents
