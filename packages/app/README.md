@@ -71,12 +71,13 @@ so config and the per-session workspace resolve correctly.
 
 ### Zed
 
-Add to Zed `settings.json`:
+Add to Zed `settings.json` (or Settings -> External Agents -> Add Agent -> Custom Agent):
 
 ```json
 {
   "agent_servers": {
     "Gaunt Sloth": {
+      "type": "custom",
       "command": "gaunt-sloth",
       "args": ["--acp-agent"],
       "env": {}
