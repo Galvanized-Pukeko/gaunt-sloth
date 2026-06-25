@@ -48,8 +48,11 @@ const acpStatusUpdate: StatusUpdateCallback = (_level: StatusLevel, message: str
  *
  * NOTE: deepagents-acp 0.1.12 does NOT forward `permissions` to `createDeepAgent` — on the ACP
  * path fs gating is delegated to the host's interactive permission prompts, not gsloth's
- * `.aiignore`→permissions mapping. `permissions` is still passed here for forward-compatibility
- * (if a later deepagents-acp forwards it, gsloth's mapping applies with no change here).
+ * `.aiignore`→permissions mapping. `permissions` is still passed here for forward-compatibility.
+ * EXT-13 caveat: the ACP backend keeps `virtualMode` ON (`/` = workspace, see gthAcpServer), while
+ * EXT-13 re-anchored gsloth's default permissions at the REAL absolute cwd for the local runner. So
+ * if a future deepagents-acp DOES forward these rules they would not match the virtual `/`-rooted
+ * paths the ACP backend hands them — revisit the mapping (or the ACP backend's mode) at that point.
  */
 export async function startAcpServer(
   config: GthConfig,
