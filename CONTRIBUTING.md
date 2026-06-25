@@ -37,10 +37,11 @@ pnpm run format
 
 ## Local Development Registry (optional)
 
-The four publishable packages — `@gaunt-sloth/{core,tools,api,review}` — release
-in lock-step (`packages/core/package.json` holds the authoritative version).
+The publishable packages — the `@gaunt-sloth/{agent,core,review}` libraries plus
+the `gaunt-sloth` CLI app (dir `packages/app`) — release in lock-step
+(`packages/core/package.json` holds the authoritative version).
 When iterating against downstream
-consumers (`galvanized-pukeko-ai-ui`, `pukeko-robot-controller`, etc.), it is
+consumers (`galvanized-pukeko`, `pukeko-robot-controller`, etc.), it is
 much faster to publish dev versions to a local [Verdaccio](https://verdaccio.org)
 registry than to rebuild tarballs each cycle.
 
@@ -116,14 +117,14 @@ pnpm run release:bump 0.0.7   # passing the current version re-syncs without bum
 pnpm run release:bump-and-commit
 
 pnpm run build
-pnpm run release:publish    # publishes core → tools → api → review to Verdaccio
+pnpm run release:publish    # publishes core → agent → review → app to Verdaccio
 ```
 
-`release:bump` writes the new version into `packages/{tools,core,api,review}`,
+`release:bump` writes the new version into `packages/{core,agent,review}`,
 pins their internal `@gaunt-sloth/*` deps to that exact version (no caret —
 the lock-stepped set has no useful range semantics), and rewrites
-`packages/app`'s `@gaunt-sloth/*` pins to match without touching
-assistant's own version (1.5.x is its independent user-facing semver).
+`packages/app`'s `@gaunt-sloth/*` pins to match. On the 2.x line the
+`gaunt-sloth` app is versioned in lock-step with the libraries.
 
 Then in any downstream repo, bump its `@gaunt-sloth/*` pins to the new version
 and run `pnpm install` — Verdaccio serves the local copy via the per-repo
@@ -225,13 +226,13 @@ Open a GitHub Issue describing:
 
 ## Documentation Publishing
 
-If you need to publish project documentation, clone `gaunt-sloth-assistant.github.io` in the same parent directory as this repository and run:
+API documentation is generated from the TypeScript sources with TypeDoc:
 
 ```bash
-./update-docs.sh
+npm run typedoc
 ```
 
-Commit and push from the `gaunt-sloth-assistant.github.io` repository.
+The generated output is published through the [gauntsloth.app](https://gauntsloth.app/) site (docs at https://gauntsloth.app/docs/).
 
 ## Code of Conduct
 
