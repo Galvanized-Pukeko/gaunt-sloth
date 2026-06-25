@@ -70,17 +70,17 @@ function normalizePathFragment(p: string): string {
 /**
  * Convert `.aiignore` patterns (relative, .gitignore-ish) into deepagents deny rules.
  *
- * deepagents matches the path argument the model passes to a fs tool — resolved by the
- * backend — against ABSOLUTE globs. With `virtualMode` the backend treats paths as
- * virtual-absolute under `rootDir`, so we anchor at "/".
+ * deepagents matches the path argument the model passes to a fs tool against ABSOLUTE
+ * globs. EXT-13: the backend now runs WITHOUT virtualMode in both the default and widened
+ * cases, so paths are REAL absolute paths and the caller passes the absolute cwd as `base`
+ * to anchor these deny rules there.
  *
  * A bare pattern (`*.env`, `secret.txt`) should match at any depth, so we emit both a
- * top-level (`/secret.txt`) and a recursive (`/&#42;&#42;/secret.txt`) rule. A pattern already
- * containing "/" (`config/secrets.json`) is anchored as-is (plus a `/**` subtree rule).
+ * top-level (`<base>/secret.txt`) and a recursive (`<base>/&#42;&#42;/secret.txt`) rule. A pattern
+ * already containing "/" (`config/secrets.json`) is anchored as-is (plus a `/**` subtree rule).
  *
- * `base` defaults to "" so paths are anchored at the virtual root "/". When the sandbox is
- * widened (`--allow-dir`, no virtualMode) the backend uses REAL absolute paths, so the caller
- * passes the absolute cwd as `base` to anchor these deny rules there.
+ * `base` defaults to "" (anchoring at the virtual root "/") for legacy callers; gsloth's
+ * {@link buildPermissions} always passes the absolute cwd now.
  */
 export function aiignoreToPermissions(patterns: string[], base = ''): FilesystemPermission[] {
   const rules: FilesystemPermission[] = [];
@@ -95,19 +95,53 @@ export function aiignoreToPermissions(patterns: string[], base = ''): Filesystem
   return rules;
 }
 
-/** Map gsloth's filesystem mode onto deepagents permission rules. */
+/**
+ * Map gsloth's filesystem mode onto deepagents permission rules for the DEFAULT
+ * (non-widen) code-mode sandbox.
+ *
+ * EXT-13: the default backend now runs WITHOUT virtualMode (real absolute paths), so
+ * containment can no longer lean on the virtual-root chroot — it is enforced entirely by
+ * these globs anchored at the REAL absolute cwd. We therefore allow read+write within
+ * `cwd/**` (and `cwd`) and deny everything else (`/**`), mirroring what virtualMode gave
+ * for free. An explicit `string[]` allow-list resolves each entry against the real cwd.
+ *
+ * - `all`  → no extra restriction beyond the cwd sandbox (matches the old virtualMode
+ *            behavior, where `/` already meant cwd).
+ * - `read` → deny all writes (the cwd sandbox still applies for reads).
+ * - `none` → deny all reads and writes.
+ * - `string[]` → allow each (cwd-resolved) dir, deny everything else.
+ *
+ * The `cwd` argument is injected (defaults to {@link getCurrentWorkDir}) so callers/tests
+ * can anchor deterministically.
+ */
 export function filesystemModeToPermissions(
-  fs: string[] | 'all' | 'read' | 'none'
+  fs: string[] | 'all' | 'read' | 'none',
+  cwd: string = getCurrentWorkDir()
 ): FilesystemPermission[] {
-  if (fs === 'all') return [];
-  if (fs === 'read') return [{ operations: ['write'], paths: ['/**'], mode: 'deny' }];
   if (fs === 'none') return [{ operations: ['read', 'write'], paths: ['/**'], mode: 'deny' }];
-  // string[] — explicit allow-list of directories. Allow read+write within each,
-  // deny everything else. Allow rules first (first-match-wins), deny catch-all last.
+  if (fs === 'read') {
+    // Deny all writes everywhere; reads are still confined to the cwd sandbox below.
+    return [
+      { operations: ['write'], paths: ['/**'], mode: 'deny' },
+      { operations: ['read'], paths: [`${cwd}/**`, cwd], mode: 'allow' },
+      { operations: ['read'], paths: ['/**'], mode: 'deny' },
+    ];
+  }
+  if (fs === 'all') {
+    // No allow-list restriction, but the cwd sandbox must still apply by default
+    // (allow cwd/**, deny /**) — this is what virtualMode enforced implicitly.
+    return [
+      { operations: ['read', 'write'], paths: [`${cwd}/**`, cwd], mode: 'allow' },
+      { operations: ['read', 'write'], paths: ['/**'], mode: 'deny' },
+    ];
+  }
+  // string[] — explicit allow-list of directories, resolved against the REAL cwd. Allow
+  // read+write within each, deny everything else. Allow rules first (first-match-wins),
+  // deny catch-all last.
   const allow: FilesystemPermission[] = fs
     .filter((d) => d !== 'all' && d !== 'read')
     .map((d) => {
-      const dir = `/${normalizePathFragment(d)}`;
+      const dir = path.resolve(cwd, normalizePathFragment(d));
       return { operations: ['read', 'write'], paths: [`${dir}/**`, dir], mode: 'allow' };
     });
   return [...allow, { operations: ['read', 'write'], paths: ['/**'], mode: 'deny' }];
@@ -119,17 +153,17 @@ export function filesystemModeToPermissions(
  * skipped when explicitly disabled (`aiignore.enabled === false`) or has no patterns.
  */
 export function buildPermissions(config: PermissionConfigSlice): FilesystemPermission[] {
+  const cwd = getCurrentWorkDir();
   const widen = Array.isArray(config.allowDirs) && config.allowDirs.length > 0;
   const aiignoreEnabled = config.aiignore?.enabled !== false && !!config.aiignore?.patterns?.length;
-  // When widening, the backend uses real absolute paths — anchor aiignore deny rules at the
-  // absolute cwd so they keep matching project-relative ignore patterns.
-  const aiignore = aiignoreEnabled
-    ? aiignoreToPermissions(config.aiignore!.patterns!, widen ? getCurrentWorkDir() : '')
-    : [];
-  // `--allow-dir` replaces the filesystem-mode rules with the cwd + allowed-dirs allow-list,
-  // since the model now sees real absolute paths rather than virtual ones.
+  // EXT-13: the backend now uses real absolute paths in BOTH the default and widened cases,
+  // so always anchor aiignore deny rules at the absolute cwd (they keep matching
+  // project-relative ignore patterns).
+  const aiignore = aiignoreEnabled ? aiignoreToPermissions(config.aiignore!.patterns!, cwd) : [];
+  // `--allow-dir` widens to the cwd + allowed-dirs allow-list; otherwise the default
+  // filesystem-mode rules apply, both anchored at the real absolute cwd.
   const modeRules = widen
     ? allowDirsToPermissions(config.allowDirs!)
-    : filesystemModeToPermissions(config.filesystem);
+    : filesystemModeToPermissions(config.filesystem, cwd);
   return [...aiignore, ...modeRules];
 }

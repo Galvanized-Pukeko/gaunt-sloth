@@ -157,11 +157,13 @@ export class GthDeepAgent extends GthAbstractAgent {
       `Loaded middleware: ${middleware.map((m) => m.name).join(', ')}`
     );
 
-    // Default: a virtual-root sandbox anchored at cwd (absolute paths / `..` cannot escape).
-    // `--allow-dir` (config.allowDirs) opts into widening: drop virtualMode so the listed real
-    // directories are reachable, and rely on the permission allow-rules (built in
-    // buildDeepAgentParams) to constrain access to cwd + those dirs. This removes a guardrail,
-    // so it is announced loudly by the exec command and surfaced here in the status log.
+    // EXT-13: the backend always runs in REAL-path mode (virtualMode off) so the deepagents fs
+    // tools and the EXT-9 run_shell_command tool share ONE path namespace — real absolute paths
+    // rooted at cwd. Containment is enforced entirely by the permission allow/deny globs built in
+    // buildDeepAgentParams (default: allow cwd/**, deny /**), which match what virtualMode used to
+    // give for free (see deepAgentPermissions + the EXT-13 symlink/`..` parity tests).
+    // `--allow-dir` (config.allowDirs) further widens those allow-rules to reach extra real dirs;
+    // it removes a guardrail, so it is announced loudly by the exec command and surfaced here.
     const allowDirs = this.config?.allowDirs;
     const widenFs = Array.isArray(allowDirs) && allowDirs.length > 0;
     if (widenFs) {
@@ -172,15 +174,27 @@ export class GthDeepAgent extends GthAbstractAgent {
     }
     const backend = new FilesystemBackend({
       rootDir: getCurrentWorkDir(),
-      virtualMode: !widenFs,
+      virtualMode: false,
     });
+
+    // EXT-13 (part b): on the local-runner code path the model used to be told nothing about
+    // where it is, so it assumed `/` was cwd and fed `/`-rooted paths to the real-fs shell. Now
+    // the backend uses real absolute paths (above), so inject the dynamic real cwd + path model
+    // into the prompt the model actually receives. Code mode only — the surface with full fs +
+    // shell access; the ACP transport keeps virtualMode and re-roots per session, so this
+    // real-path note must NOT leak there (which is why it lives in init(), not the
+    // transport-agnostic buildDeepAgentParams).
+    const systemPrompt =
+      this.command === 'code'
+        ? appendCwdNote(params.systemPrompt, getCurrentWorkDir())
+        : params.systemPrompt;
 
     this.agent = createDeepAgent({
       model: params.model,
       tools: params.tools as StructuredToolInterface[],
       // gsloth's composed prompt, combined ADDITIVELY by deepagents with its base + fs prompts
       // into a single system message (avoids the two-system-message Anthropic rejection).
-      systemPrompt: params.systemPrompt,
+      systemPrompt,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       middleware: middleware as any,
       backend,
@@ -426,6 +440,26 @@ export class GthDeepAgent extends GthAbstractAgent {
     if (command === 'code') return config.commands?.code?.devTools;
     return undefined;
   }
+}
+
+/**
+ * EXT-13 (part b): append a real-cwd / path-model note to the composed code-mode system prompt.
+ *
+ * The default code-mode backend runs in REAL-path mode (no virtualMode), so the deepagents fs
+ * tools and `run_shell_command` share one real-absolute-path namespace rooted at `cwd`. Neither
+ * deepagents' base prompt nor `.gsloth.code.md` states the actual cwd, so without this the model
+ * assumes `/` is cwd and hands `/`-rooted paths to the real-fs shell. The cwd is injected
+ * dynamically (never baked into the .md). Returns the note alone when there is no base prompt.
+ */
+export function appendCwdNote(systemPrompt: string | undefined, cwd: string): string {
+  const cwdNote =
+    `Working directory: ${cwd}\n` +
+    'Paths are real absolute filesystem paths (there is no virtual root). The working directory ' +
+    'above is where this session runs; relative paths resolve against it, and both the filesystem ' +
+    'tools (ls/glob/read_file/write_file/edit_file/grep) and run_shell_command operate on these ' +
+    'same real paths. Check the current directory before filesystem operations and prefer absolute ' +
+    'paths (or paths relative to the working directory); do not assume the current directory is "/".';
+  return systemPrompt ? `${systemPrompt}\n\n${cwdNote}` : cwdNote;
 }
 
 /**

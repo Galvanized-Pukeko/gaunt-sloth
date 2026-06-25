@@ -73,7 +73,9 @@ describe('GthDeepAgent', () => {
     expect(params.model).toBe(config.llm);
     expect(params.checkpointer).toBe(checkpointer);
     expect(params.backend).toBeInstanceOf(FilesystemBackendStub);
-    expect((params.backend as FilesystemBackendStub).options).toMatchObject({ virtualMode: true });
+    // EXT-13: the backend always runs in real-path mode now (virtualMode off); containment is
+    // enforced by the permission globs anchored at the real cwd, not the virtual-root chroot.
+    expect((params.backend as FilesystemBackendStub).options).toMatchObject({ virtualMode: false });
     expect(params.permissions).toEqual(buildPermissions({ filesystem: 'none' }));
     expect(params.tools.map((t: { name: string }) => t.name)).toEqual(['foo']);
   });
@@ -99,14 +101,16 @@ describe('GthDeepAgent', () => {
     );
   });
 
-  it('without allowDirs keeps virtualMode on (default cwd sandbox)', async () => {
+  it('without allowDirs runs in real-path mode too (EXT-13: default cwd sandbox via globs)', async () => {
     const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
     const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
 
     await agent.init('exec', makeConfig({ filesystem: 'all' }));
 
     const params = createDeepAgentMock.mock.calls[0][0];
-    expect((params.backend as FilesystemBackendStub).options).toMatchObject({ virtualMode: true });
+    // EXT-13: the default sandbox no longer relies on virtualMode — the backend uses real
+    // absolute paths and the cwd allow/deny globs do the containment.
+    expect((params.backend as FilesystemBackendStub).options).toMatchObject({ virtualMode: false });
   });
 
   it('passes the composed gsloth system prompt to createDeepAgent (chat prompt by default)', async () => {
@@ -123,7 +127,7 @@ describe('GthDeepAgent', () => {
     expect(createDeepAgentMock.mock.calls[0][0].systemPrompt).toBe('SYSTEM PROMPT');
   });
 
-  it('uses the code-mode prompt for the code command', async () => {
+  it('uses the code-mode prompt for the code command and appends the EXT-13 cwd note', async () => {
     const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
     const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
     const config = makeConfig();
@@ -132,17 +136,45 @@ describe('GthDeepAgent', () => {
 
     expect(readCodePromptMock).toHaveBeenCalledWith(config);
     expect(buildSystemMessagesMock).toHaveBeenCalledWith(config, 'code-mode-prompt');
+    // EXT-13 (part b): code mode appends the real cwd + path-model note so the model knows where
+    // it is (the fs tools + run_shell_command share one real-absolute-path namespace).
+    const prompt = createDeepAgentMock.mock.calls[0][0].systemPrompt as string;
+    expect(prompt.startsWith('SYSTEM PROMPT')).toBe(true);
+    expect(prompt).toContain('Working directory:');
+    expect(prompt).toContain('real absolute filesystem paths');
+  });
+
+  it('does NOT append the cwd note for non-code commands (chat keeps the bare prompt)', async () => {
+    const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
+    const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
+
+    await agent.init('chat', makeConfig());
+
     expect(createDeepAgentMock.mock.calls[0][0].systemPrompt).toBe('SYSTEM PROMPT');
   });
 
-  it('leaves systemPrompt undefined when no prompt content is composed', async () => {
+  it('leaves systemPrompt undefined when no prompt content is composed (non-code command)', async () => {
+    buildSystemMessagesMock.mockReturnValue([]);
+    const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
+    const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
+
+    await agent.init('chat', makeConfig());
+
+    expect(createDeepAgentMock.mock.calls[0][0].systemPrompt).toBeUndefined();
+  });
+
+  it('in code mode still emits the cwd note even when no other prompt content is composed', async () => {
     buildSystemMessagesMock.mockReturnValue([]);
     const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
     const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
 
     await agent.init('code', makeConfig());
 
-    expect(createDeepAgentMock.mock.calls[0][0].systemPrompt).toBeUndefined();
+    // EXT-13: the cwd / path-model note is essential for code mode, so it is injected even with
+    // an otherwise-empty composed prompt (no leading blank lines).
+    const prompt = createDeepAgentMock.mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('Working directory:');
+    expect(prompt.startsWith('Working directory:')).toBe(true);
   });
 
   it('drops resolved tools that collide with deepagents filesystem tool names', async () => {
@@ -444,5 +476,22 @@ describe('GthDeepAgent', () => {
     // extractAndFlattenTools clones client tools and replaces invoke/call with a stub.
     expect(passed[0]).not.toBe(clientTool);
     expect(passed[0].invoke).not.toBe(clientTool.invoke);
+  });
+});
+
+describe('appendCwdNote (EXT-13 part b)', () => {
+  it('appends the real cwd + path-model note to an existing prompt', async () => {
+    const { appendCwdNote } = await import('#src/core/GthDeepAgent.js');
+    const out = appendCwdNote('BASE PROMPT', '/home/user/proj');
+    expect(out.startsWith('BASE PROMPT\n\n')).toBe(true);
+    expect(out).toContain('Working directory: /home/user/proj');
+    expect(out).toContain('there is no virtual root');
+    expect(out).toContain('run_shell_command');
+  });
+
+  it('returns just the note (no leading blank lines) when there is no base prompt', async () => {
+    const { appendCwdNote } = await import('#src/core/GthDeepAgent.js');
+    const out = appendCwdNote(undefined, '/srv/app');
+    expect(out.startsWith('Working directory: /srv/app')).toBe(true);
   });
 });
