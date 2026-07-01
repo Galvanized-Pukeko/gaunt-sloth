@@ -36,13 +36,20 @@ d('GthDevToolkit shell hardening on Windows (real spawn)', () => {
     ).executeCommand(command, 'run_shell_command');
   };
 
-  it('reaps a long-running command after the timeout instead of hanging', async () => {
+  it('reaps a long-running command after the timeout instead of hanging (throws, body preserved)', async () => {
+    const { ShellCommandFailedError } = await import('#src/tools/GthDevToolkit.js');
     const start = Date.now();
     // `ping -n 60` runs ~59s (1s between echoes); a 300ms tool timeout must reap
     // it via taskkill. `timeout`/`pause` read stdin (ignored) so ping is safer.
-    const result = await run('ping -n 60 127.0.0.1', { shell: { enabled: true, timeout: 300 } });
+    // EXT-20: the timeout-kill now REJECTS with ShellCommandFailedError (exitCode null); the
+    // taskkill reap path must still fire (not hang) on Windows so the promise settles.
+    const error = await run('ping -n 60 127.0.0.1', {
+      shell: { enabled: true, timeout: 300 },
+    }).catch((e) => e as InstanceType<typeof ShellCommandFailedError>);
     const elapsed = Date.now() - start;
-    expect(result).toContain('was killed after exceeding');
+    expect(error).toBeInstanceOf(ShellCommandFailedError);
+    expect(error.exitCode).toBeNull();
+    expect(error.output).toContain('was killed after exceeding');
     // Resolves well before the 59s command (timeout + the 3s SIGKILL grace).
     expect(elapsed).toBeLessThan(15_000);
   }, 30_000);

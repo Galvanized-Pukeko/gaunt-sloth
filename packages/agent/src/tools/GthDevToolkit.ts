@@ -23,6 +23,45 @@ import { OutputBuffer } from '#src/tools/shell/outputBuffer.js';
 const KILL_GRACE_MS = 3_000;
 
 /**
+ * EXT-20: a run_* command that did NOT exit cleanly (non-zero exit code, or was killed for
+ * exceeding the timeout). Carries the FULL model-facing body text ({@link output}) so the
+ * softening middleware ({@link GthDeepShellExitSoftening}) can hand the model the exact same
+ * observation it saw before — the only change is the tool result's status flips to `'error'`,
+ * which drives the ✗ (`isError`) glyph.
+ *
+ * `executeCommand` previously `resolve()`d on a non-zero exit, so the LangChain `ToolMessage`
+ * stayed `status: 'success'` and every failure rendered a ✓. Throwing this typed error instead
+ * lets the deep-agent middleware convert it into an error `ToolMessage`. A clean exit (`code === 0`)
+ * still `resolve()`s; a spawn-level `child.on('error')` still rejects with a plain `Error`.
+ */
+export class ShellCommandFailedError extends Error {
+  /** The full model-facing body (command echo + `<COMMAND_OUTPUT>` + the failure/timeout tail). */
+  readonly output: string;
+  /** The process exit code; `null` when the command was killed (timeout) and never exited cleanly. */
+  readonly exitCode: number | null;
+  /** The exact command string that was executed. */
+  readonly command: string;
+  /** The run_* tool name that invoked the command (e.g. `run_tests`, `run_shell_command`). */
+  readonly toolName: string;
+
+  constructor(params: {
+    output: string;
+    exitCode: number | null;
+    command: string;
+    toolName: string;
+  }) {
+    // Use the full body as the Error message so any generic logger/handler still surfaces the
+    // real command output rather than an opaque wrapper string.
+    super(params.output);
+    this.name = 'ShellCommandFailedError';
+    this.output = params.output;
+    this.exitCode = params.exitCode;
+    this.command = params.command;
+    this.toolName = params.toolName;
+  }
+}
+
+/**
  * Kill the child AND its descendants on timeout.
  *
  * POSIX: the child is spawned `detached`, so it leads its own process group;
@@ -209,8 +248,12 @@ export default class GthDevToolkit extends BaseToolkit {
    *  4. an unbypassable hardline blocklist (refuses catastrophic commands BEFORE
    *     spawn — fires even when confirmation is bypassed by yolo).
    *
-   * Resolves with a model-facing string. Timeouts resolve (not reject) so the
-   * model sees the killed-after-N message and can continue.
+   * Resolves with a model-facing string on a CLEAN exit (`code === 0`). EXT-20: a non-zero exit
+   * and a timeout-kill instead REJECT with a {@link ShellCommandFailedError} that carries the FULL
+   * model-facing body — the deep-agent {@link GthDeepShellExitSoftening} middleware converts that
+   * throw into an error `ToolMessage` (status:'error' → ✗) while preserving the output, so the
+   * model still sees the killed-after-N / exit-code message and can continue. Spawn-level failures
+   * (`child.on('error')`) still reject with a plain `Error`.
    */
   private async executeCommand(command: string, toolName: string): Promise<string> {
     displayInfo(`\n🔧 Executing ${toolName}: ${command}`);
@@ -292,12 +335,21 @@ export default class GthDevToolkit extends BaseToolkit {
           `</COMMAND_OUTPUT>\n`;
 
         if (timedOut) {
-          resolve(
-            body +
-              `\n\nCommand '${command}' was killed after exceeding the ${Math.round(
-                timeoutMs / 1000
-              )}s timeout. ` +
-              `If it legitimately needs longer, increase the shell timeout in config.`
+          // EXT-20: a timeout-kill is a failure — reject so the deep-agent middleware flips the
+          // tool result to status:'error' (✗). The FULL body is preserved on the error so the
+          // model's observation is unchanged except for the status.
+          reject(
+            new ShellCommandFailedError({
+              output:
+                body +
+                `\n\nCommand '${command}' was killed after exceeding the ${Math.round(
+                  timeoutMs / 1000
+                )}s timeout. ` +
+                `If it legitimately needs longer, increase the shell timeout in config.`,
+              exitCode: null,
+              command,
+              toolName,
+            })
           );
           return;
         }
@@ -305,7 +357,16 @@ export default class GthDevToolkit extends BaseToolkit {
         if (code === 0) {
           resolve(body + `\n\nCommand '${command}' completed successfully`);
         } else {
-          resolve(body + `\n\nCommand '${command}' exited with code ${code}`);
+          // EXT-20: a non-zero exit is a failure — reject (was resolve) so the softening
+          // middleware surfaces the ✗ (isError) signal while preserving the full output body.
+          reject(
+            new ShellCommandFailedError({
+              output: body + `\n\nCommand '${command}' exited with code ${code}`,
+              exitCode: code,
+              command,
+              toolName,
+            })
+          );
         }
       });
 

@@ -1030,6 +1030,59 @@ describe('GthLangChainAgent', () => {
       expect(JSON.parse(events[1].delta!)).toEqual({ path: '/home' });
       expect(events[3]).toMatchObject({ type: 'tool_result', id: 'tc-1', content: '[FILE] x' });
     });
+
+    it("maps a ToolMessage status:'error' to isError:true on the tool_result event (EXT-20 end-to-end)", async () => {
+      const agent = new GthLangChainAgent(statusUpdateCallback);
+      const fakeListChatModel = new FakeListChatModel({ responses: [] });
+      fakeListChatModel.bindTools = vi.fn().mockReturnValue(fakeListChatModel);
+      await agent.init(undefined, { ...mockConfig, llm: fakeListChatModel });
+
+      // A failed run_* command reaches the stream as an error-status ToolMessage (produced by the
+      // GthDeepShellExitSoftening middleware). The renderer contract must carry that through as
+      // isError so the TUI draws ✗, without sniffing the body text. A success ToolMessage stays
+      // flag-free.
+      const failCall = new AIMessageChunk({
+        content: '',
+        tool_call_chunks: [{ id: 'tc-fail', name: 'run_tests', args: '{}', index: 0 }],
+      });
+      const failResult = new ToolMessage({
+        content: "Command 'npm test' exited with code 1",
+        tool_call_id: 'tc-fail',
+        status: 'error',
+      });
+      const okCall = new AIMessageChunk({
+        content: '',
+        tool_call_chunks: [{ id: 'tc-ok', name: 'run_lint', args: '{}', index: 0 }],
+      });
+      const okResult = new ToolMessage({ content: 'all good', tool_call_id: 'tc-ok' });
+
+      async function* streamed() {
+        yield [failCall, {}];
+        yield [failResult, {}];
+        yield [okCall, {}];
+        yield [okResult, {}];
+      }
+      agentMock.stream.mockResolvedValue(streamed());
+
+      const events: { type: string; id?: string; content?: string; isError?: boolean }[] = [];
+      for await (const ev of agent.streamWithEvents([new HumanMessage('go')], {
+        recursionLimit: 1000,
+        configurable: { thread_id: 'tc-iserror' },
+      })) {
+        events.push(ev as { type: string; id?: string; content?: string; isError?: boolean });
+      }
+
+      const toolResults = events.filter((e) => e.type === 'tool_result');
+      const failEvent = toolResults.find((e) => e.id === 'tc-fail')!;
+      const okEvent = toolResults.find((e) => e.id === 'tc-ok')!;
+      expect(failEvent).toMatchObject({
+        content: "Command 'npm test' exited with code 1",
+        isError: true,
+      });
+      // Success tool_result must NOT carry the flag (consumers treat absent as success).
+      expect(okEvent.content).toBe('all good');
+      expect(okEvent.isError).toBeUndefined();
+    });
   });
 
   describe('streamWithEventsResume', () => {

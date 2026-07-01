@@ -260,6 +260,7 @@ describe('GthDeepAgent', () => {
     const params = createDeepAgentMock.mock.calls[0][0];
     expect(params.middleware.map((m: { name: string }) => m.name)).toEqual([
       'GthDeepFsDenialSoftening',
+      'GthDeepShellExitSoftening',
       'custom-mw',
       'GthMiddlewareToolCallStatusUpdate',
       'GthMiddlewareDebugCapture',
@@ -368,6 +369,54 @@ describe('GthDeepAgent', () => {
 
     await expect(softening.wrapToolCall({ toolCall: { id: 'tc1' } }, handler)).rejects.toThrow(
       'boom'
+    );
+  });
+
+  it('shell-exit-softening converts a ShellCommandFailedError into an error ToolMessage, body preserved', async () => {
+    const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
+    const { ShellCommandFailedError } = await import('#src/tools/GthDevToolkit.js');
+    const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
+    await agent.init(undefined, makeConfig());
+
+    const softening = createDeepAgentMock.mock.calls[0][0].middleware.find(
+      (m: { name: string }) => m.name === 'GthDeepShellExitSoftening'
+    );
+    const body =
+      "Executing 'npm test'...\n\n<COMMAND_OUTPUT>\n1 failing\n</COMMAND_OUTPUT>\n" +
+      "\n\nCommand 'npm test' exited with code 1";
+    const handler = vi.fn().mockRejectedValue(
+      new ShellCommandFailedError({
+        output: body,
+        exitCode: 1,
+        command: 'npm test',
+        toolName: 'run_tests',
+      })
+    );
+
+    const result = await softening.wrapToolCall({ toolCall: { id: 'tc-shell' } }, handler);
+    // Full stdout/stderr body preserved verbatim — the model's observation is unchanged...
+    expect(String(result.content)).toBe(body);
+    expect(result.tool_call_id).toBe('tc-shell');
+    // ...except the status flips to 'error' (→ isError → ✗ glyph).
+    expect(result.status).toBe('error');
+  });
+
+  it('shell-exit-softening rethrows a non-shell error (e.g. a permission throw) for the sibling to handle', async () => {
+    const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
+    const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
+    await agent.init(undefined, makeConfig());
+
+    const softening = createDeepAgentMock.mock.calls[0][0].middleware.find(
+      (m: { name: string }) => m.name === 'GthDeepShellExitSoftening'
+    );
+    // A plain Error (not a ShellCommandFailedError) must pass straight through untouched so the
+    // disjoint fsDenialSoftening sibling can still see permission throws.
+    const handler = vi
+      .fn()
+      .mockRejectedValue(new Error('permission denied for read on /secret.env'));
+
+    await expect(softening.wrapToolCall({ toolCall: { id: 'tc1' } }, handler)).rejects.toThrow(
+      'permission denied for read on /secret.env'
     );
   });
 

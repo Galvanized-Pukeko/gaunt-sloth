@@ -200,7 +200,7 @@ describe('GthDevToolkit - Basic Tests', () => {
       );
     });
 
-    it('should handle command failure', async () => {
+    it('should throw ShellCommandFailedError on a non-zero exit (was resolve)', async () => {
       const mockChild = {
         on: vi.fn((event, callback) => {
           if (event === 'close') callback(1); // Failure
@@ -210,8 +210,87 @@ describe('GthDevToolkit - Basic Tests', () => {
       };
       childProcessMock.spawn.mockReturnValueOnce(mockChild as any);
 
-      const result = await toolkit['executeCommand']('failing cmd', 'test_tool');
-      expect(result).toContain('exited with code 1');
+      // EXT-20: a non-zero exit REJECTS (was resolve) so the softening middleware can flip the
+      // ToolMessage to status:'error' (✗). The message carries the full failure body.
+      await expect(toolkit['executeCommand']('failing cmd', 'test_tool')).rejects.toThrow(
+        'exited with code 1'
+      );
+    });
+
+    it('preserves stdout/stderr and metadata on the ShellCommandFailedError', async () => {
+      const { ShellCommandFailedError } = await import('#src/tools/GthDevToolkit.js');
+      const mockChild = {
+        on: vi.fn((event, callback) => {
+          if (event === 'close') callback(3);
+        }),
+        stdout: {
+          on: vi.fn((event, callback) => {
+            if (event === 'data') callback(Buffer.from('captured-stdout\n'));
+          }),
+        },
+        stderr: {
+          on: vi.fn((event, callback) => {
+            if (event === 'data') callback(Buffer.from('captured-stderr\n'));
+          }),
+        },
+      };
+      childProcessMock.spawn.mockReturnValueOnce(mockChild as any);
+
+      const error = (await toolkit['executeCommand']('failing cmd', 'run_build').catch(
+        (e) => e
+      )) as InstanceType<typeof ShellCommandFailedError>;
+
+      expect(error).toBeInstanceOf(ShellCommandFailedError);
+      expect(error.exitCode).toBe(3);
+      expect(error.command).toBe('failing cmd');
+      expect(error.toolName).toBe('run_build');
+      // The full model-facing body is preserved verbatim (output + both streams + the exit tail).
+      expect(error.output).toContain('<COMMAND_OUTPUT>');
+      expect(error.output).toContain('captured-stdout');
+      expect(error.output).toContain('captured-stderr');
+      expect(error.output).toContain("Command 'failing cmd' exited with code 3");
+      // Error.message mirrors the body so a generic logger still surfaces the real output.
+      expect(error.message).toBe(error.output);
+    });
+
+    it('throws ShellCommandFailedError (exitCode null) when the command is killed on timeout', async () => {
+      vi.useFakeTimers();
+      try {
+        const { ShellCommandFailedError } = await import('#src/tools/GthDevToolkit.js');
+        const mockKill = vi.fn();
+        let closeCallback: ((_code: number | null) => void) | undefined;
+        const mockChild = {
+          // No numeric pid → killProcessGroup is a no-op (we only exercise the timeout→reject path,
+          // not a real process-group signal).
+          on: vi.fn((event: string, callback: (_arg: any) => void) => {
+            if (event === 'close') closeCallback = callback;
+          }),
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          kill: mockKill,
+        };
+        childProcessMock.spawn.mockReturnValueOnce(mockChild as any);
+
+        const timeoutToolkit = new GthDevToolkit({ shell: { enabled: true, timeout: 50 } });
+        const resultPromise = (
+          timeoutToolkit as unknown as {
+            executeCommand(_c: string, _n: string): Promise<string>;
+          }
+        ).executeCommand('sleep 999', 'run_shell_command');
+        // Attach a catch synchronously so the rejection is never unhandled.
+        const captured = resultPromise.catch((e) => e);
+
+        // Trip the timeout timer, then simulate the process closing after the kill.
+        await vi.advanceTimersByTimeAsync(50);
+        closeCallback?.(null);
+
+        const error = (await captured) as InstanceType<typeof ShellCommandFailedError>;
+        expect(error).toBeInstanceOf(ShellCommandFailedError);
+        expect(error.exitCode).toBeNull();
+        expect(error.output).toContain('was killed after exceeding');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should handle execution error', async () => {
