@@ -42,11 +42,18 @@ d('GthDevToolkit shell hardening (real spawn)', () => {
     ).executeCommand(command, 'run_shell_command');
   };
 
-  it('kills a long-running command after the configured timeout', async () => {
+  it('kills a long-running command after the configured timeout (throws, preserving the body)', async () => {
+    const { ShellCommandFailedError } = await import('#src/tools/GthDevToolkit.js');
     const start = Date.now();
-    const result = await run('sleep 30', { shell: { enabled: true, timeout: 300 } });
+    // EXT-20: a timeout-kill now REJECTS with ShellCommandFailedError (exitCode null) so the
+    // deep-agent middleware renders ✗; the killed-after-N message is preserved on the error.
+    const error = await run('sleep 30', { shell: { enabled: true, timeout: 300 } }).catch(
+      (e) => e as InstanceType<typeof ShellCommandFailedError>
+    );
     const elapsed = Date.now() - start;
-    expect(result).toContain('was killed after exceeding');
+    expect(error).toBeInstanceOf(ShellCommandFailedError);
+    expect(error.exitCode).toBeNull();
+    expect(error.output).toContain('was killed after exceeding');
     // Should be killed quickly (well before sleep 30 finishes).
     expect(elapsed).toBeLessThan(10_000);
   }, 15_000);

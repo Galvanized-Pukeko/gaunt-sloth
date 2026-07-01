@@ -22,6 +22,7 @@ import {
   type FilesystemPermission,
 } from '#src/core/deepAgentPermissions.js';
 import type { DebugCapture, DebugRequestExtras, DebugToolDef } from '#src/core/debugCapture.js';
+import { ShellCommandFailedError } from '#src/tools/GthDevToolkit.js';
 
 /**
  * EXT-16: decide whether the deepagents filesystem backend must run in virtualMode.
@@ -374,10 +375,46 @@ export class GthDeepAgent extends GthAbstractAgent {
       },
     });
 
-    // fsDenialSoftening first so it is the outermost wrapToolCall — it must see the throw
-    // from deepagents' permission-enforcing fs tools. The console-bound tool-call-status
-    // middleware is NOT added here (see GthDeepAgentParams.middleware); the runner appends it.
-    const middleware = [fsDenialSoftening, ...configuredMiddleware];
+    // EXT-20: sibling of fsDenialSoftening for the run_* (dev/shell) tools. GthDevToolkit's
+    // executeCommand now THROWS a ShellCommandFailedError on a non-zero exit or a timeout-kill
+    // (instead of resolving with the failure text), so the tool result no longer misreports
+    // status:'success' (✓). Catch it here and return an error ToolMessage that PRESERVES the full
+    // stdout/stderr body — the model's observation is unchanged except that status flips to
+    // 'error', which drives the ✗ (isError) glyph (GthAbstractAgent maps status==='error' →
+    // isError). Returning a ToolMessage (rather than rethrowing) also means the approved-then-failed
+    // command does NOT trigger a retry loop — it is a normal, observed tool result.
+    const shellExitSoftening = createMiddleware({
+      name: 'GthDeepShellExitSoftening',
+      wrapToolCall: async (request, handler) => {
+        try {
+          return await handler(request);
+        } catch (e) {
+          if (e instanceof ShellCommandFailedError) {
+            debugLog(
+              `Softened shell/dev command failure (exit ${e.exitCode ?? 'timeout'}) into an ` +
+                `error ToolMessage for '${e.command}'`
+            );
+            return new ToolMessage({
+              content: e.output,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              tool_call_id: (request.toolCall as any)?.id ?? '',
+              status: 'error',
+            });
+          }
+          throw e;
+        }
+      },
+    });
+
+    // fsDenialSoftening first so it is the outermost wrapToolCall — it must see the throw from
+    // deepagents' permission-enforcing fs tools. shellExitSoftening sits right after it (still
+    // outboard of any user-configured middleware, so it always sees the raw ShellCommandFailedError
+    // throw before a user wrapToolCall could transform it). Order between the two softeners is not
+    // load-bearing: they catch DISJOINT conditions (a permission-denied regex vs an
+    // `instanceof ShellCommandFailedError`) and each rethrows what it doesn't recognize, so neither
+    // can swallow the other. The console-bound tool-call-status middleware is NOT added here (see
+    // GthDeepAgentParams.middleware); the runner appends it.
+    const middleware = [fsDenialSoftening, shellExitSoftening, ...configuredMiddleware];
 
     // Map gsloth's .aiignore + filesystem mode onto deepagents permission rules. When
     // `--allow-dir` widens the sandbox, the backend runs without virtualMode, so paths are REAL
