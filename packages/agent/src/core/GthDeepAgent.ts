@@ -167,7 +167,28 @@ export class GthDeepAgent extends GthAbstractAgent {
       },
     });
 
-    const middleware = [...params.middleware, toolCallStatusMiddleware, debugCaptureMiddleware];
+    // EXT-16: whether the deepagents fs backend runs in virtualMode. deepagents' permission layer
+    // requires POSIX `/`-rooted paths, so a Windows real cwd (`D:\...`) can't be expressed as a
+    // permission glob and the EXT-13 real-path mode hangs there (`Error: path must be absolute`).
+    // When the real cwd isn't POSIX-rooted, fall back to virtualMode (cwd→`/`) with virtual
+    // permissions — the pre-EXT-13 known-good Windows behavior. Computed here because the EXT-22 S1
+    // middleware (below), the backend, and the systemPrompt gate (further down) all key off it.
+    const useVirtualFs = shouldUseVirtualFs();
+
+    // EXT-22 (S1): last-word path-namespace correction. Appends the shared guidance as a trailing
+    // system-message block ONLY in code + virtualMode (where the fs virtual `/` root and the
+    // shell's real-OS paths diverge); a transparent pass-through otherwise. Added LAST in the
+    // middleware array so, being the innermost wrapModelCall, its block lands AFTER deepagents'
+    // "All file paths must start with a /." line (see handoff/spike-systemmessage-ordering.md).
+    const pathNamespaceCorrectionMiddleware = createPathNamespaceCorrectionMiddleware(
+      this.command === 'code' && useVirtualFs
+    );
+    const middleware = [
+      ...params.middleware,
+      toolCallStatusMiddleware,
+      debugCaptureMiddleware,
+      pathNamespaceCorrectionMiddleware,
+    ];
     this.statusUpdate(
       StatusLevel.INFO,
       `Loaded middleware: ${middleware.map((m) => m.name).join(', ')}`
@@ -182,11 +203,6 @@ export class GthDeepAgent extends GthAbstractAgent {
     // it removes a guardrail, so it is announced loudly by the exec command and surfaced here.
     const allowDirs = this.config?.allowDirs;
     const widenFs = Array.isArray(allowDirs) && allowDirs.length > 0;
-    // EXT-16: deepagents' permission layer requires POSIX `/`-rooted paths, so a Windows real
-    // cwd (`D:\...`) can't be expressed as a permission glob and the EXT-13 real-path mode hangs
-    // there (`Error: path must be absolute`). When the real cwd isn't POSIX-rooted, fall back to
-    // virtualMode (cwd→`/`) with virtual permissions — the pre-EXT-13 known-good Windows behavior.
-    const useVirtualFs = shouldUseVirtualFs();
     if (widenFs) {
       this.statusUpdate(
         StatusLevel.WARNING,
@@ -208,12 +224,16 @@ export class GthDeepAgent extends GthAbstractAgent {
     // shell access; the ACP transport keeps virtualMode and re-roots per session, so this
     // real-path note must NOT leak there (which is why it lives in init(), not the
     // transport-agnostic buildDeepAgentParams).
-    // In virtualMode (EXT-16, Windows) the model correctly assumes the virtual root `/` IS cwd
-    // (the pre-EXT-13 behavior), so the real-cwd note must NOT be injected — it would mislabel
-    // the namespace. Only the real-path code path needs it.
+    // In virtualMode (EXT-16, Windows) the real-cwd note must NOT be injected — it would mislabel
+    // the namespace (the fs tools' `/` is the virtual root, not the real cwd). Instead, EXT-22 (S2)
+    // injects the virtualMode path-namespace note so the model is told EARLY that the fs virtual
+    // `/` root and run_shell_command's real-OS paths differ (the S1 middleware repeats it as the
+    // authoritative last word after deepagents' `/`-rooted line). Non-code paths get neither.
     const systemPrompt =
-      this.command === 'code' && !useVirtualFs
-        ? appendCwdNote(params.systemPrompt, getCurrentWorkDir())
+      this.command === 'code'
+        ? useVirtualFs
+          ? appendVirtualCwdNote(params.systemPrompt)
+          : appendCwdNote(params.systemPrompt, getCurrentWorkDir())
         : params.systemPrompt;
 
     this.agent = createDeepAgent({
@@ -524,6 +544,78 @@ export class GthDeepAgent extends GthAbstractAgent {
     if (command === 'code') return config.commands?.code?.devTools;
     return undefined;
   }
+}
+
+/**
+ * EXT-22: shared virtualMode path-namespace guidance — ONE source of truth used by BOTH the S2
+ * early-framing note ({@link appendVirtualCwdNote}, injected into gsloth's composed systemPrompt =
+ * block 0) and the S1 last-word correction middleware
+ * ({@link createPathNamespaceCorrectionMiddleware}, appended after deepagents' `/`-rooted line).
+ *
+ * In a virtualMode `code` session (EXT-16, e.g. Windows) the deepagents filesystem tools use a
+ * VIRTUAL `/` root (= the working dir) while `run_shell_command` uses REAL native OS paths; the
+ * model conflates the two forms. This text draws the distinction and steers toward cwd-relative
+ * paths (the one form both tool families read alike).
+ *
+ * It deliberately does NOT equate the virtual root with a specific real path (no "`/` = D:\\work"):
+ * virtualMode withholds the real cwd on purpose (see the systemPrompt gate in {@link
+ * GthDeepAgent.init}), so the guidance is about the DISTINCTION between the two namespaces and the
+ * safety of relative paths, not a mapping between them.
+ */
+export const PATH_NAMESPACE_GUIDANCE =
+  'The filesystem tools (ls, read_file, write_file, edit_file, glob, grep) use a VIRTUAL root in ' +
+  'this session: a leading `/` means your working directory, and their paths are written ' +
+  '`/`-rooted relative to it (this is what "all file paths must start with a /" refers to). That ' +
+  '`/` is NOT the real operating-system filesystem root. run_shell_command is different: it runs ' +
+  'in the real operating system and uses real native paths (on Windows, e.g. ' +
+  '`C:\\Users\\...\\project`, with backslashes), never the virtual `/` root. A `/`-rooted path ' +
+  'from the filesystem tools is NOT a valid shell path and must never be passed to ' +
+  'run_shell_command. The one form that means the same thing to both tool families is a path ' +
+  'RELATIVE to the working directory (e.g. `src/index.ts`); prefer relative paths for both. When ' +
+  'you must be absolute, use `/`-rooted form ONLY for the filesystem tools and real native form ' +
+  'ONLY for run_shell_command.';
+
+/**
+ * EXT-22 (S2): virtualMode variant of {@link appendCwdNote}. On the `code` path when the fs
+ * backend runs in virtualMode (EXT-16), inject the shared path-namespace guidance EARLY in
+ * gsloth's composed systemPrompt (block 0) so the model is framed before deepagents' own prompt.
+ *
+ * This is early framing only: deepagents' hardcoded `/`-rooted line lands in a LATER block and can
+ * partially override block 0, so the authoritative last word is delivered by the S1 middleware
+ * ({@link createPathNamespaceCorrectionMiddleware}); see handoff/spike-systemmessage-ordering.md.
+ * Returns the note alone when there is no base prompt.
+ */
+export function appendVirtualCwdNote(systemPrompt: string | undefined): string {
+  const note = `Filesystem vs shell path namespaces: ${PATH_NAMESPACE_GUIDANCE}`;
+  return systemPrompt ? `${systemPrompt}\n\n${note}` : note;
+}
+
+/**
+ * EXT-22 (S1): the load-bearing path-namespace correction. A gsloth `wrapModelCall` middleware
+ * runs INNERMOST (inside deepagents' filesystem middleware), so appending a trailing block to
+ * `request.systemMessage` lands AFTER deepagents' hardcoded "All file paths must start with a /."
+ * line — giving gsloth the last word on path semantics (empirically verified; see
+ * handoff/spike-systemmessage-ordering.md). It APPENDS via `request.systemMessage.concat(...)`
+ * (mirroring how deepagents appends its own fs prompt), never string-splices, and returns a NEW
+ * request so it never mutates persisted state (no compounding across turns).
+ *
+ * `appendCorrection` gates it to `code` + virtualMode: only there do the fs virtual `/` root and
+ * the shell's real-OS paths diverge. On POSIX real-path mode deepagents' "start with /" is
+ * literally true, so the middleware is a transparent pass-through (like the debug-capture
+ * middleware when no sink is attached).
+ */
+export function createPathNamespaceCorrectionMiddleware(appendCorrection: boolean) {
+  return createMiddleware({
+    name: 'GthDeepPathNamespaceCorrection',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wrapModelCall: async (request: any, handler: any) => {
+      if (!appendCorrection || !request?.systemMessage) return handler(request);
+      const correction =
+        'IMPORTANT — path namespaces (authoritative; this overrides any earlier instruction that ' +
+        `implies every path is a simple \`/\`-rooted filesystem path): ${PATH_NAMESPACE_GUIDANCE}`;
+      return handler({ ...request, systemMessage: request.systemMessage.concat(correction) });
+    },
+  });
 }
 
 /**

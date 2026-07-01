@@ -1,6 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SystemMessage } from '@langchain/core/messages';
 import type { GthConfig } from '#src/config.js';
 import { buildPermissions } from '#src/core/deepAgentPermissions.js';
+
+// getCurrentWorkDir drives shouldUseVirtualFs() (real cwd not `/`-rooted → virtualMode). Mock it
+// so tests can toggle between POSIX real-path mode ('/...') and virtualMode ('D:\\...'). Partial
+// mock (spread the real module) because GthDevToolkit + deepAgentPermissions also import other
+// systemUtils members (stdout, …) that must stay real.
+const getCurrentWorkDirMock = vi.fn();
+vi.mock('@gaunt-sloth/core/utils/systemUtils.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@gaunt-sloth/core/utils/systemUtils.js')>()),
+  getCurrentWorkDir: () => getCurrentWorkDirMock(),
+}));
+
+/** Flatten a SystemMessage's content (string or text-block array) to one searchable string. */
+function assembledText(sm: unknown): string {
+  const content = (sm as { content?: unknown } | undefined)?.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => (typeof b === 'string' ? b : ((b as { text?: string }).text ?? '')))
+      .join('\n');
+  }
+  return '';
+}
 
 // Capture createDeepAgent params; stub FilesystemBackend as a constructible marker.
 const createDeepAgentMock = vi.fn();
@@ -48,6 +71,8 @@ describe('GthDeepAgent', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    // Default: a POSIX `/`-rooted cwd → real-path mode (virtualMode off), the code-path default.
+    getCurrentWorkDirMock.mockReturnValue('/home/user/proj');
     createDeepAgentMock.mockReturnValue({ invoke: vi.fn(), stream: vi.fn() });
     readChatPromptMock.mockReturnValue('chat-mode-prompt');
     readCodePromptMock.mockReturnValue('code-mode-prompt');
@@ -264,6 +289,9 @@ describe('GthDeepAgent', () => {
       'custom-mw',
       'GthMiddlewareToolCallStatusUpdate',
       'GthMiddlewareDebugCapture',
+      // EXT-22 (S1): the path-namespace correction is always installed but LAST (innermost), so its
+      // appended block lands after deepagents' `/`-rooted line. Inactive here (command undefined).
+      'GthDeepPathNamespaceCorrection',
     ]);
   });
 
@@ -558,6 +586,149 @@ describe('GthDeepAgent', () => {
     // extractAndFlattenTools clones client tools and replaces invoke/call with a stub.
     expect(passed[0]).not.toBe(clientTool);
     expect(passed[0].invoke).not.toBe(clientTool.invoke);
+  });
+});
+
+describe('EXT-22 path-namespace guidance (S2 note + S1 correction middleware)', () => {
+  const statusUpdate = vi.fn();
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    getCurrentWorkDirMock.mockReturnValue('/home/user/proj');
+    createDeepAgentMock.mockReturnValue({ invoke: vi.fn(), stream: vi.fn() });
+    readChatPromptMock.mockReturnValue('chat-mode-prompt');
+    readCodePromptMock.mockReturnValue('code-mode-prompt');
+    readExecPromptMock.mockReturnValue('exec-mode-prompt');
+    buildSystemMessagesMock.mockReturnValue([{ content: 'SYSTEM PROMPT' }]);
+  });
+
+  // A substring that appears ONLY in the virtualMode path-namespace guidance (never in the EXT-13
+  // real-path note), so negative assertions can't false-pass on shared words like 'run_shell_command'.
+  const VIRTUAL_ONLY_MARKER = 'is NOT a valid shell path';
+
+  async function initAgent(command: 'code' | 'chat', cwd: string) {
+    getCurrentWorkDirMock.mockReturnValue(cwd);
+    const { GthDeepAgent } = await import('#src/core/GthDeepAgent.js');
+    const agent = new GthDeepAgent(statusUpdate, { resolveTools: vi.fn().mockResolvedValue([]) });
+    await agent.init(command, makeConfig());
+    return createDeepAgentMock.mock.calls[0][0];
+  }
+
+  function lastMiddleware(params: { middleware: { name: string }[] }) {
+    return params.middleware[params.middleware.length - 1] as {
+      name: string;
+      wrapModelCall: (_req: unknown, _handler: unknown) => Promise<unknown>;
+    };
+  }
+
+  // ---- S2: virtualMode variant of the cwd note (block 0 of the composed prompt) ----
+
+  it('S2: code + virtualMode injects the virtualMode namespace note (NOT the real-path note)', async () => {
+    const params = await initAgent('code', 'D:\\work'); // non-POSIX cwd → virtualMode
+    const prompt = params.systemPrompt as string;
+    expect(prompt.startsWith('SYSTEM PROMPT')).toBe(true);
+    expect(prompt).toContain('Filesystem vs shell path namespaces:'); // S2 framing sentence
+    expect(prompt).toContain(VIRTUAL_ONLY_MARKER); // the shared guidance body
+    // The EXT-13 real-path note must NOT be present in virtualMode.
+    expect(prompt).not.toContain('there is no virtual root');
+    expect(prompt).not.toContain('Working directory:');
+  });
+
+  it('S2: code + real-path (POSIX) keeps the EXT-13 note and NOT the virtualMode guidance', async () => {
+    const params = await initAgent('code', '/home/user/proj');
+    const prompt = params.systemPrompt as string;
+    expect(prompt).toContain('Working directory:');
+    expect(prompt).toContain('there is no virtual root'); // EXT-13 real-path note
+    expect(prompt).not.toContain(VIRTUAL_ONLY_MARKER); // no virtualMode guidance
+  });
+
+  it('S2: virtualMode but non-code command (chat) gets NEITHER note', async () => {
+    const params = await initAgent('chat', 'D:\\work');
+    expect(params.systemPrompt).toBe('SYSTEM PROMPT');
+  });
+
+  // ---- S1: last-word correction middleware (placement + gating + behavior) ----
+
+  it('S1: installed as the LAST middleware entry (innermost) so its block lands last', async () => {
+    const params = await initAgent('code', 'D:\\work');
+    const names = params.middleware.map((m: { name: string }) => m.name);
+    expect(names[names.length - 1]).toBe('GthDeepPathNamespaceCorrection');
+  });
+
+  it('S1: ACTIVE in code + virtualMode — appends the guidance as a trailing block', async () => {
+    const params = await initAgent('code', 'D:\\work');
+    const mw = lastMiddleware(params);
+    const base = new SystemMessage('BASE PROMPT');
+    const handler = vi.fn().mockResolvedValue('response');
+    const result = await mw.wrapModelCall({ systemMessage: base }, handler);
+
+    const passed = (handler.mock.calls[0][0] as { systemMessage: unknown }).systemMessage;
+    const text = assembledText(passed);
+    expect(text.startsWith('BASE PROMPT')).toBe(true); // appended AFTER the base content
+    expect(text).toContain(VIRTUAL_ONLY_MARKER);
+    expect(text).toContain('authoritative'); // S1's distinct authority framing
+    expect(result).toBe('response'); // transparent to the handler's return
+  });
+
+  it('S1: no compounding — input is not mutated and each call appends exactly one block', async () => {
+    const params = await initAgent('code', 'D:\\work');
+    const mw = lastMiddleware(params);
+    const base = new SystemMessage('BASE PROMPT');
+    const handler = vi.fn().mockResolvedValue('r');
+
+    await mw.wrapModelCall({ systemMessage: base }, handler);
+    await mw.wrapModelCall({ systemMessage: base }, handler);
+
+    // The input SystemMessage is never written back to (concat returns a new message).
+    expect(base.content).toBe('BASE PROMPT');
+    // Each call sees the base + exactly ONE guidance block — no accumulation across calls/turns.
+    for (const call of handler.mock.calls) {
+      const text = assembledText((call[0] as { systemMessage: unknown }).systemMessage);
+      const occurrences = text.split(VIRTUAL_ONLY_MARKER).length - 1;
+      expect(occurrences).toBe(1);
+    }
+  });
+
+  it('S1: transparent pass-through in code + real-path (POSIX) — request untouched', async () => {
+    const params = await initAgent('code', '/home/user/proj');
+    const mw = lastMiddleware(params);
+    const request = { systemMessage: new SystemMessage('BASE PROMPT') };
+    const handler = vi.fn().mockResolvedValue('r');
+
+    const result = await mw.wrapModelCall(request, handler);
+    // Same request object flows through unchanged (no concat, no guidance).
+    expect(handler).toHaveBeenCalledWith(request);
+    expect(assembledText(request.systemMessage)).not.toContain(VIRTUAL_ONLY_MARKER);
+    expect(result).toBe('r');
+  });
+
+  it('S1: pass-through for virtualMode but non-code command (chat)', async () => {
+    const params = await initAgent('chat', 'D:\\work');
+    const mw = lastMiddleware(params);
+    const request = { systemMessage: new SystemMessage('BASE PROMPT') };
+    const handler = vi.fn().mockResolvedValue('r');
+
+    await mw.wrapModelCall(request, handler);
+    expect(handler).toHaveBeenCalledWith(request);
+    expect(assembledText(request.systemMessage)).not.toContain(VIRTUAL_ONLY_MARKER);
+  });
+});
+
+describe('appendVirtualCwdNote (EXT-22 S2)', () => {
+  it('appends the virtualMode namespace guidance to an existing prompt', async () => {
+    const { appendVirtualCwdNote } = await import('#src/core/GthDeepAgent.js');
+    const out = appendVirtualCwdNote('BASE PROMPT');
+    expect(out.startsWith('BASE PROMPT\n\n')).toBe(true);
+    expect(out).toContain('Filesystem vs shell path namespaces:');
+    expect(out).toContain('is NOT a valid shell path');
+    // Must NOT equate the virtual root with a real path (the DISTINCTION-only rule).
+    expect(out).not.toMatch(/`\/`\s*=\s*[A-Za-z]:\\/);
+  });
+
+  it('returns just the note (no leading blank lines) when there is no base prompt', async () => {
+    const { appendVirtualCwdNote } = await import('#src/core/GthDeepAgent.js');
+    const out = appendVirtualCwdNote(undefined);
+    expect(out.startsWith('Filesystem vs shell path namespaces:')).toBe(true);
   });
 });
 
