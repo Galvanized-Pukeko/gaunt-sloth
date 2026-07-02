@@ -3,7 +3,7 @@ import { env } from '#src/utils/systemUtils.js';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { ChatGoogleParams } from '@langchain/google/node';
 
-import { writeFileIfNotExistsWithMessages } from '#src/utils/fileUtils.js';
+import { writeConfigFileWithMessages } from '#src/utils/fileUtils.js';
 
 // Function to process JSON config and create Google GenAI LLM instance
 export async function processJsonConfig(
@@ -30,13 +30,13 @@ const jsonContent = `{
   }
 }`;
 
-export function init(configFileName: string): void {
+export function init(configFileName: string, force = false): void {
   // Determine which content to use based on file extension
   if (!configFileName.endsWith('.json')) {
     throw new Error('Only JSON config is supported.');
   }
 
-  writeFileIfNotExistsWithMessages(configFileName, jsonContent);
+  writeConfigFileWithMessages(configFileName, jsonContent, force);
   displayWarning(
     `You need to update your ${configFileName} to add your Google GenAI API key, ` +
       'or define GOOGLE_API_KEY environment variable.'

@@ -1924,7 +1924,7 @@ describe('config', async () => {
       );
 
       // Verify init was called with correct parameters
-      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json');
+      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json', false);
 
       // Verify writeFileIfNotExistsWithMessages was called for guidelines and review instructions
       expect(fileUtilsMock.writeFileIfNotExistsWithMessages).toHaveBeenCalledTimes(2);
@@ -2005,7 +2005,7 @@ describe('config', async () => {
       expect(consoleUtilsMock.displayInfo).toHaveBeenCalledWith(
         'Creating project config for anthropic'
       );
-      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json');
+      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json', false);
     });
 
     it('Should create project config for groq', async () => {
@@ -2027,7 +2027,7 @@ describe('config', async () => {
       await createProjectConfig(configType);
 
       expect(consoleUtilsMock.displayInfo).toHaveBeenCalledWith('Creating project config for groq');
-      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json');
+      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json', false);
     });
 
     it('Should create project config for google-genai', async () => {
@@ -2051,7 +2051,7 @@ describe('config', async () => {
       expect(consoleUtilsMock.displayInfo).toHaveBeenCalledWith(
         'Creating project config for google-genai'
       );
-      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json');
+      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json', false);
     });
 
     it('Should create project config for xai', async () => {
@@ -2073,7 +2073,7 @@ describe('config', async () => {
       await createProjectConfig(configType);
 
       expect(consoleUtilsMock.displayInfo).toHaveBeenCalledWith('Creating project config for xai');
-      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json');
+      expect(mockInit).toHaveBeenCalledWith('/mock/write/.gsloth.config.json', false);
     });
   });
 });

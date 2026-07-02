@@ -25,21 +25,40 @@ describe('initCommand', () => {
     vi.resetAllMocks();
   });
 
-  it('Should call createProjectConfig with the provided config type', async () => {
+  it('Should call createProjectConfig with the provided config type (no force by default)', async () => {
     const { initCommand } = await import('#src/commands/initCommand.js');
     const program = new Command();
     initCommand(program);
     await program.parseAsync(['na', 'na', 'init', 'vertexai']);
-    expect(createProjectConfig).toHaveBeenCalledWith('vertexai');
+    expect(createProjectConfig).toHaveBeenCalledWith('vertexai', false);
     expect(runFirstRunDialog).not.toHaveBeenCalled();
   });
 
-  it('Should run the first-run dialog when called without a type', async () => {
+  it('Should pass force through to createProjectConfig with --force', async () => {
+    const { initCommand } = await import('#src/commands/initCommand.js');
+    const program = new Command();
+    initCommand(program);
+    await program.parseAsync(['na', 'na', 'init', 'vertexai', '--force']);
+    expect(createProjectConfig).toHaveBeenCalledWith('vertexai', true);
+    expect(runFirstRunDialog).not.toHaveBeenCalled();
+  });
+
+  it('Should run the first-run dialog when called without a type (no force by default)', async () => {
     const { initCommand } = await import('#src/commands/initCommand.js');
     const program = new Command();
     initCommand(program);
     await program.parseAsync(['na', 'na', 'init']);
     expect(runFirstRunDialog).toHaveBeenCalledTimes(1);
+    expect(runFirstRunDialog).toHaveBeenCalledWith({}, false);
+    expect(createProjectConfig).not.toHaveBeenCalled();
+  });
+
+  it('Should pass force through to the first-run dialog with --force', async () => {
+    const { initCommand } = await import('#src/commands/initCommand.js');
+    const program = new Command();
+    initCommand(program);
+    await program.parseAsync(['na', 'na', 'init', '--force']);
+    expect(runFirstRunDialog).toHaveBeenCalledWith({}, true);
     expect(createProjectConfig).not.toHaveBeenCalled();
   });
 

@@ -21,9 +21,10 @@ import {
 } from '@gaunt-sloth/core/utils/systemUtils.js';
 import {
   getGslothConfigWritePath,
-  writeFileIfNotExistsWithMessages,
+  writeFileWithMessages,
 } from '@gaunt-sloth/review/utils/fileUtils.js';
 import { ensureGslothDir, writeProjectReviewPreamble } from '#src/commands/configSetup.js';
+import { existsSync } from 'node:fs';
 import { shouldUseTui } from '#src/tui/shouldUseTui.js';
 import { isInkAvailable } from '#src/tui/loadInk.js';
 
@@ -55,7 +56,14 @@ export interface FirstRunDialogDeps {
   listModels: typeof listModels;
   ensureGslothDir: typeof ensureGslothDir;
   writeProjectReviewPreamble: typeof writeProjectReviewPreamble;
-  /** Writes the config content to the scope's path and returns that path. */
+  /** Resolves the config file path for the chosen scope (does not write). */
+  resolveConfigPath: (scope: ConfigScope) => string;
+  /** True when a config file already exists at `path`. */
+  configExists: (path: string) => boolean;
+  /**
+   * (Over)writes the config content at the scope's path and returns that path. The dialog only
+   * calls this once it has decided to write, so this always writes (never a silent no-clobber skip).
+   */
   writeConfig: (scope: ConfigScope, content: string) => string;
   /** Prompts the user and resolves with their (untrimmed) answer. */
   ask: AskFn;
@@ -143,7 +151,7 @@ async function promptMenu(
 
 function defaultWriteConfig(scope: ConfigScope, content: string): string {
   const path = resolveConfigWritePath(scope);
-  writeFileIfNotExistsWithMessages(path, content);
+  writeFileWithMessages(path, content);
   return path;
 }
 
@@ -205,7 +213,8 @@ function makeDefaultSelect(ask: AskFn): SelectFn {
  * the project scope, scaffolds the review/guidelines preamble.
  */
 export async function runFirstRunDialog(
-  overrides: Partial<FirstRunDialogDeps> = {}
+  overrides: Partial<FirstRunDialogDeps> = {},
+  force = false
 ): Promise<void> {
   // The readline interface is created LAZILY, only when a readline prompt is actually needed
   // (the non-TTY number-menu fallback, or free-text model entry). On the Ink-select path it is
@@ -223,6 +232,8 @@ export async function runFirstRunDialog(
     listModels,
     ensureGslothDir,
     writeProjectReviewPreamble,
+    resolveConfigPath: resolveConfigWritePath,
+    configExists: existsSync,
     writeConfig: defaultWriteConfig,
     ask,
     select: makeDefaultSelect(ask),
@@ -279,7 +290,24 @@ export async function runFirstRunDialog(
         ? 'global'
         : 'project';
 
-    // 4. Scaffold (project only) + write.
+    // 4. Overwrite guard. If a config already exists at the chosen scope's path and the user did
+    //    not pass --force, ask whether to overwrite (default No). On No we keep the existing file
+    //    and print an honest line — never the misleading "Configured / Config written" on a skip.
+    const configPath = deps.resolveConfigPath(scope);
+    if (deps.configExists(configPath) && !force) {
+      const overwrite =
+        (await deps.select(
+          `A config already exists at ${configPath}. Overwrite it?`,
+          ['No, keep the existing config', 'Yes, overwrite it'],
+          0
+        )) === 1;
+      if (!overwrite) {
+        displayInfo(`Kept existing config at ${configPath} (not modified).`);
+        return;
+      }
+    }
+
+    // 5. Scaffold (project only) + write.
     if (scope === 'project') {
       deps.ensureGslothDir();
       deps.writeProjectReviewPreamble();

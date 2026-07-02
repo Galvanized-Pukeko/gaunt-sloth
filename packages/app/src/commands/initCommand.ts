@@ -12,6 +12,9 @@ import { Argument, Command } from 'commander';
  * detects usable providers, lets the user pick a provider + model and choose
  * whether to store the config for this project or globally.
  *
+ * `--force` overwrites an existing config: on the scriptable path it skips the
+ * warn-and-keep guard, and in the interactive dialog it skips the overwrite prompt.
+ *
  * @param program - The commander program
  */
 export function initCommand(program: Command): void {
@@ -24,11 +27,13 @@ export function initCommand(program: Command): void {
         'Config type (optional, runs the interactive dialog if omitted)'
       ).choices(availableDefaultConfigs)
     )
-    .action(async (config?: ConfigType) => {
+    .option('-f, --force', 'Overwrite an existing config file')
+    .action(async (config: ConfigType | undefined, options: { force?: boolean }) => {
+      const force = !!options.force;
       if (config) {
-        await createProjectConfig(config);
+        await createProjectConfig(config, force);
       } else {
-        await runFirstRunDialog();
+        await runFirstRunDialog({}, force);
       }
     });
 }

@@ -7,7 +7,7 @@ import {
 import { OpenAIChatInput } from '@langchain/openai';
 import { ChatOpenAIFields } from '@langchain/openai';
 
-import { writeFileIfNotExistsWithMessages } from '#src/utils/fileUtils.js';
+import { writeConfigFileWithMessages } from '#src/utils/fileUtils.js';
 
 // Function to process JSON config and create OpenRouter LLM instance
 // noinspection JSUnusedGlobalSymbols
@@ -59,13 +59,13 @@ const jsonContent = `{
   }
 }`;
 
-export function init(configFileName: string): void {
+export function init(configFileName: string, force = false): void {
   // Determine which content to use based on file extension
   if (!configFileName.endsWith('.json')) {
     throw new Error('Only JSON config is supported.');
   }
 
-  writeFileIfNotExistsWithMessages(configFileName, jsonContent);
+  writeConfigFileWithMessages(configFileName, jsonContent, force);
   displayWarning(
     `You need to edit your ${configFileName} to configure model, ` +
       'or define OPEN_ROUTER_API_KEY environment variable.'

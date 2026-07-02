@@ -6,6 +6,7 @@ let fsUtilsMock = {
   existsSync: vi.fn(),
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
+  mkdirSync: vi.fn(),
 };
 vi.mock('node:fs', () => fsUtilsMock);
 
@@ -158,6 +159,84 @@ describe('utils', () => {
       // A comes before B in the joined output
       expect(result.indexOf('A CONTENT')).toBeLessThan(result.indexOf('B CONTENT'));
       expect(fsUtilsMock.readFileSync).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('writeFileIfNotExistsWithMessages', () => {
+    it('writes and returns true when the file does not exist', async () => {
+      // filePath absent, parent dir present.
+      fsUtilsMock.existsSync.mockImplementation((p: string) => p !== '/x/config.json');
+
+      const { writeFileIfNotExistsWithMessages } = await import('#src/utils/fileUtils.js');
+      const wrote = writeFileIfNotExistsWithMessages('/x/config.json', 'BODY');
+
+      expect(wrote).toBe(true);
+      expect(fsUtilsMock.writeFileSync).toHaveBeenCalledWith('/x/config.json', 'BODY');
+      expect(consoleUtilsMock.displaySuccess).toHaveBeenCalledWith(
+        expect.stringContaining('Created')
+      );
+      expect(consoleUtilsMock.displayWarning).not.toHaveBeenCalled();
+    });
+
+    it('skips and returns false when the file already exists', async () => {
+      fsUtilsMock.existsSync.mockReturnValue(true);
+
+      const { writeFileIfNotExistsWithMessages } = await import('#src/utils/fileUtils.js');
+      const wrote = writeFileIfNotExistsWithMessages('/x/config.json', 'BODY');
+
+      expect(wrote).toBe(false);
+      expect(fsUtilsMock.writeFileSync).not.toHaveBeenCalled();
+      expect(consoleUtilsMock.displayWarning).toHaveBeenCalledWith(
+        expect.stringContaining('already exists')
+      );
+    });
+  });
+
+  describe('writeFileWithMessages', () => {
+    it('overwrites an existing file and reports it', async () => {
+      fsUtilsMock.existsSync.mockReturnValue(true);
+
+      const { writeFileWithMessages } = await import('#src/utils/fileUtils.js');
+      writeFileWithMessages('/x/config.json', 'NEW');
+
+      expect(fsUtilsMock.writeFileSync).toHaveBeenCalledWith('/x/config.json', 'NEW');
+      expect(consoleUtilsMock.displaySuccess).toHaveBeenCalledWith(
+        expect.stringContaining('Overwrote')
+      );
+    });
+
+    it('creates the file (and reports Created) when it does not exist', async () => {
+      fsUtilsMock.existsSync.mockReturnValue(false);
+
+      const { writeFileWithMessages } = await import('#src/utils/fileUtils.js');
+      writeFileWithMessages('/x/config.json', 'NEW');
+
+      expect(fsUtilsMock.writeFileSync).toHaveBeenCalledWith('/x/config.json', 'NEW');
+      expect(consoleUtilsMock.displaySuccess).toHaveBeenCalledWith(
+        expect.stringContaining('Created')
+      );
+    });
+  });
+
+  describe('writeConfigFileWithMessages', () => {
+    it('force=true overwrites even when the file exists and returns true', async () => {
+      fsUtilsMock.existsSync.mockReturnValue(true);
+
+      const { writeConfigFileWithMessages } = await import('#src/utils/fileUtils.js');
+      const wrote = writeConfigFileWithMessages('/x/config.json', 'NEW', true);
+
+      expect(wrote).toBe(true);
+      expect(fsUtilsMock.writeFileSync).toHaveBeenCalledWith('/x/config.json', 'NEW');
+    });
+
+    it('force=false is no-clobber: skips an existing file and returns false', async () => {
+      fsUtilsMock.existsSync.mockReturnValue(true);
+
+      const { writeConfigFileWithMessages } = await import('#src/utils/fileUtils.js');
+      const wrote = writeConfigFileWithMessages('/x/config.json', 'NEW', false);
+
+      expect(wrote).toBe(false);
+      expect(fsUtilsMock.writeFileSync).not.toHaveBeenCalled();
     });
   });
 });

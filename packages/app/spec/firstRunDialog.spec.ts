@@ -11,6 +11,7 @@ vi.mock('@gaunt-sloth/core/utils/consoleUtils.js', () => ({
   display: vi.fn(),
 }));
 
+import { displayInfo, displaySuccess } from '@gaunt-sloth/core/utils/consoleUtils.js';
 import {
   buildConfigContent,
   defaultModelIndex,
@@ -115,16 +116,29 @@ describe('runFirstRunDialog', () => {
   let writeConfig: ReturnType<typeof vi.fn>;
   let ensureGslothDir: ReturnType<typeof vi.fn>;
   let writeProjectReviewPreamble: ReturnType<typeof vi.fn>;
+  let resolveConfigPath: ReturnType<typeof vi.fn>;
+  let configExists: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    // Clear accumulated call history (the shared consoleUtils mocks persist across tests);
+    // otherwise a prior test's displaySuccess('Configured …') leaks into the negative assertions.
+    vi.clearAllMocks();
     writeConfig = vi.fn((_scope: string, _content: string) => '/written/path');
     ensureGslothDir = vi.fn();
     writeProjectReviewPreamble = vi.fn();
+    resolveConfigPath = vi.fn((scope: string) =>
+      scope === 'global' ? '/global/.gsloth.config.json' : '/project/.gsloth.config.json'
+    );
+    // Default: no config on disk (fresh-write scenarios). Tests that exercise the overwrite
+    // path flip this to true.
+    configExists = vi.fn(() => false);
     deps = {
       detectProviders: vi.fn(),
       listModels: vi.fn(),
       ensureGslothDir,
       writeProjectReviewPreamble,
+      resolveConfigPath,
+      configExists,
       writeConfig,
       ask: scriptedAsk([]),
       select: scriptedSelect([]),
@@ -213,5 +227,79 @@ describe('runFirstRunDialog', () => {
     await runFirstRunDialog(deps);
 
     expect(writeConfig).not.toHaveBeenCalled();
+  });
+
+  it('overwrites an existing config when the user answers Yes to the overwrite prompt', async () => {
+    deps.detectProviders = vi.fn().mockResolvedValue([
+      provider({
+        id: 'anthropic',
+        available: true,
+        apiKeyEnvironmentVariable: 'ANTHROPIC_API_KEY',
+      }),
+    ]);
+    deps.listModels = vi
+      .fn()
+      .mockResolvedValue([model('claude-haiku-4-5'), model('claude-sonnet-4-5', true)]);
+    configExists.mockReturnValue(true);
+    // provider 0, model default, scope default (project), overwrite prompt -> 1 (Yes)
+    deps.select = scriptedSelect([0, undefined, undefined, 1]);
+
+    await runFirstRunDialog(deps);
+
+    expect(configExists).toHaveBeenCalledWith('/project/.gsloth.config.json');
+    expect(writeConfig).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(displaySuccess)).toHaveBeenCalledWith(expect.stringContaining('Configured'));
+  });
+
+  it('keeps the existing config and prints an honest line when the user answers No', async () => {
+    deps.detectProviders = vi.fn().mockResolvedValue([
+      provider({
+        id: 'anthropic',
+        available: true,
+        apiKeyEnvironmentVariable: 'ANTHROPIC_API_KEY',
+      }),
+    ]);
+    deps.listModels = vi
+      .fn()
+      .mockResolvedValue([model('claude-haiku-4-5'), model('claude-sonnet-4-5', true)]);
+    configExists.mockReturnValue(true);
+    // provider 0, model default, scope default (project), overwrite prompt -> 0 (No, the default)
+    deps.select = scriptedSelect([0, undefined, undefined, 0]);
+
+    await runFirstRunDialog(deps);
+
+    expect(writeConfig).not.toHaveBeenCalled();
+    expect(ensureGslothDir).not.toHaveBeenCalled();
+    expect(writeProjectReviewPreamble).not.toHaveBeenCalled();
+    expect(vi.mocked(displayInfo)).toHaveBeenCalledWith(
+      expect.stringContaining('Kept existing config at /project/.gsloth.config.json')
+    );
+    expect(vi.mocked(displaySuccess)).not.toHaveBeenCalledWith(
+      expect.stringContaining('Configured')
+    );
+  });
+
+  it('with --force overwrites an existing config without asking the overwrite prompt', async () => {
+    deps.detectProviders = vi.fn().mockResolvedValue([
+      provider({
+        id: 'anthropic',
+        available: true,
+        apiKeyEnvironmentVariable: 'ANTHROPIC_API_KEY',
+      }),
+    ]);
+    deps.listModels = vi
+      .fn()
+      .mockResolvedValue([model('claude-haiku-4-5'), model('claude-sonnet-4-5', true)]);
+    configExists.mockReturnValue(true);
+    // Only provider/model/scope selections; NO overwrite prompt is expected when force is set.
+    const select = vi.fn(scriptedSelect([0, undefined, undefined]));
+    deps.select = select;
+
+    await runFirstRunDialog(deps, true);
+
+    // provider + model + scope = exactly 3 select calls (no 4th overwrite prompt)
+    expect(select).toHaveBeenCalledTimes(3);
+    expect(writeConfig).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(displaySuccess)).toHaveBeenCalledWith(expect.stringContaining('Configured'));
   });
 });

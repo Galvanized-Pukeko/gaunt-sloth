@@ -201,7 +201,12 @@ export function readFileFromInstallDir(
   }
 }
 
-export function writeFileIfNotExistsWithMessages(filePath: string, content: string): void {
+/**
+ * No-clobber write: writes `content` only when `filePath` does not already exist.
+ * @returns `true` when the file was written, `false` when it was skipped because it
+ *   already existed. Callers use the return value to avoid claiming success on a skip.
+ */
+export function writeFileIfNotExistsWithMessages(filePath: string, content: string): boolean {
   displayInfo(`checking ${filePath} existence`);
   if (!existsSync(filePath)) {
     // Create parent directories if they don't exist
@@ -211,9 +216,44 @@ export function writeFileIfNotExistsWithMessages(filePath: string, content: stri
     }
     writeFileSync(filePath, content);
     displaySuccess(`Created ${filePath}`);
-  } else {
-    displayWarning(`${filePath} already exists`);
+    return true;
   }
+  displayWarning(`${filePath} already exists`);
+  return false;
+}
+
+/**
+ * Unconditional write: writes (or overwrites) `content` at `filePath`, creating parent
+ * directories as needed. Use this only for the config-overwrite path (an explicit user /
+ * `--force` decision); the no-clobber {@link writeFileIfNotExistsWithMessages} still guards
+ * user-editable preamble files (guidelines / review).
+ */
+export function writeFileWithMessages(filePath: string, content: string): void {
+  const parentDir = dirname(filePath);
+  if (!existsSync(parentDir)) {
+    mkdirSync(parentDir, { recursive: true });
+  }
+  const existed = existsSync(filePath);
+  writeFileSync(filePath, content);
+  displaySuccess(existed ? `Overwrote ${filePath}` : `Created ${filePath}`);
+}
+
+/**
+ * Config-file write that honours an overwrite flag.
+ * - `force === true`  → always (over)writes.
+ * - `force === false` → no-clobber (skips + warns when the file already exists).
+ * @returns `true` when a write happened, `false` when it was skipped.
+ */
+export function writeConfigFileWithMessages(
+  filePath: string,
+  content: string,
+  force = false
+): boolean {
+  if (force) {
+    writeFileWithMessages(filePath, content);
+    return true;
+  }
+  return writeFileIfNotExistsWithMessages(filePath, content);
 }
 
 export function appendToFile(filePath: string, content: string): void {

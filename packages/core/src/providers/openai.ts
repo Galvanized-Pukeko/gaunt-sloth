@@ -7,7 +7,7 @@ import {
 import { OpenAIChatInput } from '@langchain/openai';
 import { ChatOpenAIFields } from '@langchain/openai';
 
-import { writeFileIfNotExistsWithMessages } from '#src/utils/fileUtils.js';
+import { writeConfigFileWithMessages } from '#src/utils/fileUtils.js';
 
 /**
  * OpenAI reasoning-model families that reject any non-default `temperature`: the API 400s with
@@ -81,13 +81,13 @@ const jsonContent = `{
   }
 }`;
 
-export function init(configFileName: string): void {
+export function init(configFileName: string, force = false): void {
   // Determine which content to use based on file extension
   if (!configFileName.endsWith('.json')) {
     throw new Error('Only JSON config is supported.');
   }
 
-  writeFileIfNotExistsWithMessages(configFileName, jsonContent);
+  writeConfigFileWithMessages(configFileName, jsonContent, force);
   displayWarning(
     `You need to edit your ${configFileName} to configure model, ` +
       'or define OPENAI_API_KEY environment variable.'

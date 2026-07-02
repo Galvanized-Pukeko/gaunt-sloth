@@ -1,5 +1,5 @@
 import { displayWarning } from '#src/utils/consoleUtils.js';
-import { writeFileIfNotExistsWithMessages } from '#src/utils/fileUtils.js';
+import { writeConfigFileWithMessages } from '#src/utils/fileUtils.js';
 import { env } from '#src/utils/systemUtils.js';
 import type { AnthropicInput } from '@langchain/anthropic';
 import type {
@@ -32,13 +32,13 @@ const jsonContent = `{
 }`;
 
 // noinspection JSUnusedGlobalSymbols
-export function init(configFileName: string): void {
+export function init(configFileName: string, force = false): void {
   // Determine which content to use based on file extension
   if (!configFileName.endsWith('.json')) {
     throw new Error('Only JSON config is supported.');
   }
 
-  writeFileIfNotExistsWithMessages(configFileName, jsonContent);
+  writeConfigFileWithMessages(configFileName, jsonContent, force);
   displayWarning(
     `You need to update your ${configFileName} to add your Anthropic API key, ` +
       'or define ANTHROPIC_API_KEY environment variable.'

@@ -27,7 +27,7 @@ const systemUtilsMock = {
 vi.mock('#src/utils/systemUtils.js', () => systemUtilsMock);
 
 const fileUtilsMock = {
-  writeFileIfNotExistsWithMessages: vi.fn(),
+  writeConfigFileWithMessages: vi.fn(),
 };
 vi.mock('#src/utils/fileUtils.js', () => fileUtilsMock);
 
@@ -143,11 +143,22 @@ describe('ollama provider init', () => {
 
     init('.gsloth.config.json');
 
-    expect(fileUtilsMock.writeFileIfNotExistsWithMessages).toHaveBeenCalledTimes(1);
-    const [fileName, content] = fileUtilsMock.writeFileIfNotExistsWithMessages.mock.calls[0];
+    expect(fileUtilsMock.writeConfigFileWithMessages).toHaveBeenCalledTimes(1);
+    const [fileName, content, force] = fileUtilsMock.writeConfigFileWithMessages.mock.calls[0];
     expect(fileName).toBe('.gsloth.config.json');
     expect(content).toContain('"type": "ollama"');
+    expect(force).toBe(false);
     expect(consoleUtilsMock.displayWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it('overwrites the config when called with force', async () => {
+    const { init } = await import('#src/providers/ollama.js');
+
+    init('.gsloth.config.json', true);
+
+    expect(fileUtilsMock.writeConfigFileWithMessages).toHaveBeenCalledTimes(1);
+    const [, , force] = fileUtilsMock.writeConfigFileWithMessages.mock.calls[0];
+    expect(force).toBe(true);
   });
 
   it('rejects non-JSON config file names', async () => {

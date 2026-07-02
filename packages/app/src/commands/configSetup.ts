@@ -14,7 +14,7 @@ import { exit, getCurrentWorkDir } from '@gaunt-sloth/core/utils/systemUtils.js'
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-export async function createProjectConfig(configType: string): Promise<void> {
+export async function createProjectConfig(configType: string, force = false): Promise<void> {
   if (!availableDefaultConfigs.includes(configType as ConfigType)) {
     displayError(
       `Unknown config type: ${configType}. Available options: ${availableDefaultConfigs.join(', ')}`
@@ -28,9 +28,20 @@ export async function createProjectConfig(configType: string): Promise<void> {
   writeProjectReviewPreamble();
   displayWarning(`Make sure you add as much detail as possible to your ${PROJECT_GUIDELINES}.\n`);
 
+  // The config file is the only artefact that gets an overwrite path; the preamble files above stay
+  // no-clobber. Without --force, keep an existing config (and say so honestly) rather than running
+  // the provider init, whose no-clobber write would silently skip and leave a misleading trail.
+  const configPath = getGslothConfigWritePath(USER_PROJECT_CONFIG_JSON);
+  if (!force && existsSync(configPath)) {
+    displayWarning(
+      `${configPath} already exists and was kept (not overwritten). Re-run with --force to overwrite it.`
+    );
+    return;
+  }
+
   displayInfo(`Creating project config for ${configType}`);
   const vendorConfig = await import(`@gaunt-sloth/core/providers/${configType}.js`);
-  vendorConfig.init(getGslothConfigWritePath(USER_PROJECT_CONFIG_JSON));
+  vendorConfig.init(configPath, force);
 }
 
 /**

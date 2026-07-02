@@ -14,7 +14,7 @@ import { displayWarning } from '#src/utils/consoleUtils.js';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { ChatGoogleParams } from '@langchain/google/node';
 
-import { writeFileIfNotExistsWithMessages } from '#src/utils/fileUtils.js';
+import { writeConfigFileWithMessages } from '#src/utils/fileUtils.js';
 
 const jsonContent = `{
   "llm": {
@@ -23,13 +23,13 @@ const jsonContent = `{
   }
 }`;
 
-export function init(configFileName: string): void {
+export function init(configFileName: string, force = false): void {
   // Determine which content to use based on file extension
   if (!configFileName.endsWith('.json')) {
     throw new Error('Only JSON config is supported.');
   }
 
-  writeFileIfNotExistsWithMessages(configFileName, jsonContent);
+  writeConfigFileWithMessages(configFileName, jsonContent, force);
   displayWarning(
     'For Google VertexAI you likely to need to do `gcloud auth login` and `gcloud auth application-default login`.'
   );

@@ -6,7 +6,7 @@ import type {
 } from '@langchain/core/language_models/chat_models';
 import type { ChatXAIInput } from '@langchain/xai';
 
-import { writeFileIfNotExistsWithMessages } from '#src/utils/fileUtils.js';
+import { writeConfigFileWithMessages } from '#src/utils/fileUtils.js';
 
 // Function to process JSON config and create XAI LLM instance
 export async function processJsonConfig(
@@ -29,13 +29,13 @@ const jsonContent = `{
   }
 }`;
 
-export function init(configFileName: string): void {
+export function init(configFileName: string, force = false): void {
   // Determine which content to use based on file extension
   if (!configFileName.endsWith('.json')) {
     throw new Error('Only JSON config is supported.');
   }
 
-  writeFileIfNotExistsWithMessages(configFileName, jsonContent);
+  writeConfigFileWithMessages(configFileName, jsonContent, force);
   displayWarning(
     `You need to update your ${configFileName} to add your xAI API key, ` +
       'or define XAI_API_KEY environment variable.'
