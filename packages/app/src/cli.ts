@@ -73,7 +73,7 @@ if (coerced !== undefined) {
 }
 
 // Initialize all commands - they will handle their own config loading
-initCommand(program);
+initCommand(program, cliConfigOverrides);
 reviewCommand(program, cliConfigOverrides);
 prCommand(program, cliConfigOverrides);
 askCommand(program, cliConfigOverrides);
