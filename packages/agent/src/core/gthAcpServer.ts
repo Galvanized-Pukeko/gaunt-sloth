@@ -22,6 +22,7 @@
 import { DeepAgentsServer, type DeepAgentsServerOptions } from 'deepagents-acp';
 import { resolve } from 'node:path';
 import { debugLog } from '@gaunt-sloth/core/utils/debugUtils.js';
+import { setAcpShellWorkDir } from '#src/tools/shell/workDir.js';
 
 // deepagents-acp keeps a private `acpBackends: Map<agentName, ACPFilesystemBackend>`; the backend
 // roots its local ls/glob/grep at `this.cwd` (deepagents' FilesystemBackend base) and resolves
@@ -80,6 +81,16 @@ export async function startGthAcpServer(
         }
         debugLog(`ACP session: virtual fs, root ${cwd ?? '[startup workspace]'}`);
       }
+      // EXT-23: align the shell tool (run_shell_command) with THIS session's fs-backend root, so the
+      // shell spawns where the fs tools read/write. `cwd` is the resolved session root; when
+      // session/new carries no cwd, deepagents-acp keeps the startup workspace (rooted at
+      // `workspaceRoot ?? process.cwd()`), so fall back to that. This is the ACP counterpart of the
+      // local runner's EXT-22 S4 alignment, and it sidesteps getCurrentWorkDir()'s INIT_CWD (stale in
+      // the long-lived ACP subprocess — the reason acpModule roots the startup workspace at raw
+      // process.cwd()). Set unconditionally per session so the shell tracks the session cwd even if
+      // the backend map has not been populated yet.
+      const startupRoot = options.workspaceRoot ? resolve(options.workspaceRoot) : process.cwd();
+      setAcpShellWorkDir(cwd ?? startupRoot);
       return result;
     };
   } else {
