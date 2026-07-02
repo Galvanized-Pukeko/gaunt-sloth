@@ -5,11 +5,18 @@ import {
   GthAgentInterface,
   GthCommand,
   GthCompiledGraph,
+  GthRunStats,
   Message,
   PendingToolInterrupt,
   StatusLevel,
   StatusUpdateCallback,
 } from '#src/core/types.js';
+import {
+  accumulateMessage,
+  createRunStatsAccumulator,
+  finalizeRunStats,
+  type RunStatsAccumulator,
+} from '#src/core/runStats.js';
 import { debugLog, debugLogError, debugLogObject } from '#src/utils/debugUtils.js';
 import { ProgressIndicator } from '#src/utils/ProgressIndicator.js';
 import { stopWaitingForEscape, waitForEscape } from '#src/utils/systemUtils.js';
@@ -44,11 +51,55 @@ export abstract class GthAbstractAgent implements GthAgentInterface {
   protected config: GthConfig | null = null;
   protected command: GthCommand | undefined = undefined;
 
+  /**
+   * GS2-16 — per-run analytics tally (token usage + invoked tool names) folded from the messages
+   * flowing through {@link invoke} / the streaming paths. Reset at each turn boundary via
+   * {@link resetRunStats} (the runner is reused across turns), read via {@link getRunStats}, and
+   * fully fail-soft (accumulation is guarded and never throws into a run).
+   */
+  private runStatsAcc: RunStatsAccumulator = createRunStatsAccumulator();
+
   constructor(statusUpdate: StatusUpdateCallback, resolvers?: AgentResolvers) {
     this.statusUpdate = (level: StatusLevel, message: string) => {
       statusUpdate(level, message);
     };
     this.resolvers = resolvers;
+  }
+
+  /**
+   * GS2-16 — clear the per-run analytics tally so the next turn starts from zero. The runner
+   * calls this at each turn boundary because it (and this agent) are reused across turns in an
+   * interactive session.
+   */
+  resetRunStats(): void {
+    this.runStatsAcc = createRunStatsAccumulator();
+  }
+
+  /** GS2-16 — the analytics harvested since the last {@link resetRunStats}. Never throws. */
+  getRunStats(): GthRunStats {
+    return finalizeRunStats(this.runStatsAcc);
+  }
+
+  /** GS2-16 — fold one message (or chunk) into the run tally. Fully guarded (fail-soft). */
+  protected recordRunStats(message: unknown): void {
+    accumulateMessage(this.runStatsAcc, message);
+  }
+
+  /**
+   * GS2-16 — best-effort count of messages already in the checkpointed thread state, used by
+   * {@link invoke} as the baseline so it harvests only THIS turn's new messages rather than the
+   * whole accumulated conversation a checkpointer returns. Fail-soft: a missing `getState`, an odd
+   * state shape, or any error yields 0 (worst case a one-turn over-count, never a throw).
+   */
+  private async getStateMessageCount(runConfig: RunnableConfig): Promise<number> {
+    try {
+      if (!this.agent || typeof this.agent.getState !== 'function') return 0;
+      const state = await this.agent.getState(runConfig);
+      const messages = (state as { values?: { messages?: unknown } })?.values?.messages;
+      return Array.isArray(messages) ? messages.length : 0;
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -80,7 +131,20 @@ export abstract class GthAbstractAgent implements GthAgentInterface {
       const progress = new ProgressIndicator('Thinking.');
       try {
         debugLog('Calling agent.invoke...');
+        // GS2-16: capture the prior conversation length BEFORE invoking so we harvest ONLY this
+        // turn's NEW messages. With a checkpointer + persistent thread (a multi-turn `--no-tui`
+        // interactive session with `streamOutput: false`), `response.messages` is the FULL
+        // accumulated conversation, not just this turn — folding all of it would re-sum prior
+        // turns' usage_metadata and re-collect prior tools (per-turn over-count). This baseline
+        // slice also prevents a double-harvest by the empty-stream fallback invoke in
+        // GthAgentRunner: by then the streamed turn is checkpointed, so it is BEFORE the baseline.
+        // Fail-soft: an unreadable baseline yields 0 (a one-turn over-count at worst, never a throw).
+        const priorMessageCount = await this.getStateMessageCount(runConfig);
         const response = await this.agent.invoke({ messages }, runConfig);
+        // Harvest token usage + invoked tool names from THIS turn's new messages only (fail-soft)
+        // so the opt-in history recorder can populate `gth insights`.
+        const allMessages = Array.isArray(response.messages) ? response.messages : [];
+        for (const m of allMessages.slice(priorMessageCount)) this.recordRunStats(m);
         const finalMessage = response.messages[response.messages.length - 1];
         const finalContent = finalMessage?.content;
         const processedContent = !this.config.writeBinaryOutputsToFile
@@ -171,6 +235,9 @@ export abstract class GthAbstractAgent implements GthAgentInterface {
     const statusUpdate = this.statusUpdate;
     const config = this.config;
     const command = this.command;
+    // GS2-16: bound so the stream `start()` closure (whose `this` is the stream source, not the
+    // agent) can fold each chunk into the run tally. Fail-soft inside recordRunStats.
+    const recordRunStats = (m: unknown) => this.recordRunStats(m);
     const interruptState = { escape: false, messageShown: false };
     const abortController = new AbortController();
     const showInterruptMessage = () => {
@@ -214,6 +281,9 @@ export abstract class GthAbstractAgent implements GthAgentInterface {
 
           for await (const [chunk, _metadata] of stream) {
             debugLogObject('Stream chunk', { chunk, _metadata });
+            // GS2-16: fold every chunk (AIMessageChunk usage/tool_calls, ToolMessage name) into
+            // the run tally before the text-only handling below.
+            recordRunStats(chunk);
             if (AIMessage.isInstance(chunk)) {
               const text = (chunk.text as string) ?? '';
               totalChunks++;
@@ -459,6 +529,9 @@ export abstract class GthAbstractAgent implements GthAgentInterface {
 
     for await (const [chunk, _metadata] of stream) {
       debugLogObject('streamWithEvents chunk', { chunk, _metadata });
+      // GS2-16: fold every chunk (AIMessageChunk usage/tool_calls, ToolMessage name) into the
+      // run tally so the TUI turn can record real token/tool data. Fail-soft.
+      this.recordRunStats(chunk);
 
       if (AIMessageChunk.isInstance(chunk)) {
         aggregatedAIChunk = aggregatedAIChunk ? aggregatedAIChunk.concat(chunk) : chunk;
