@@ -17,7 +17,7 @@ import { env, stdout } from '@gaunt-sloth/core/utils/systemUtils.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { createResolvers } from '@gaunt-sloth/agent/resolvers.js';
-import { gthDeepAgentFactory } from '@gaunt-sloth/agent/core/gthDeepAgentFactory.js';
+import { resolveAgentFactory } from '@gaunt-sloth/agent/core/resolveAgentFactory.js';
 import { GthDeepAgent } from '@gaunt-sloth/agent/core/GthDeepAgent.js';
 import type { SessionConfig } from '@gaunt-sloth/agent/modules/interactiveSessionModule.js';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -170,7 +170,10 @@ export async function createTuiSession(
   const bridge = createStatusBridge();
   const debugBridge = createDebugBridge();
   const approvalBridge = createApprovalBridge();
-  const runner = new GthAgentRunner(bridge.emit, createResolvers(), gthDeepAgentFactory);
+  // B5: TUI code/chat default to the deep backend; an explicit config.agent.backend overrides it
+  // (mirrors the readline path in createInteractiveSession). createResolvers() is unchanged, so a
+  // lean session keeps the full toolset.
+  const runner = new GthAgentRunner(bridge.emit, createResolvers(), resolveAgentFactory(config, 'deep'));
 
   try {
     await runner.init(sessionConfig.mode, config, checkpointSaver);

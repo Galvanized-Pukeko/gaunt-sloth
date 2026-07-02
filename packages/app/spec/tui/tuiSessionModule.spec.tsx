@@ -57,7 +57,11 @@ vi.mock('@gaunt-sloth/core/utils/systemUtils.js', () => systemUtilsMock);
 vi.mock('@langchain/core/messages', () => ({ HumanMessage: vi.fn() }));
 vi.mock('@langchain/langgraph', () => ({ MemorySaver: vi.fn() }));
 vi.mock('@gaunt-sloth/agent/resolvers.js', () => ({ createResolvers: vi.fn() }));
-vi.mock('@gaunt-sloth/agent/core/gthDeepAgentFactory.js', () => ({ gthDeepAgentFactory: vi.fn() }));
+const resolvedFactory = vi.hoisted(() => vi.fn());
+const resolveAgentFactoryMock = vi.hoisted(() => vi.fn());
+vi.mock('@gaunt-sloth/agent/core/resolveAgentFactory.js', () => ({
+  resolveAgentFactory: resolveAgentFactoryMock,
+}));
 vi.mock('@gaunt-sloth/agent/core/GthDeepAgent.js', () => ({ GthDeepAgent: vi.fn() }));
 
 // ── tui-local deps ─────────────────────────────────────────────────────────────
@@ -82,6 +86,7 @@ describe('createTuiSession — launch bump (TUI-C13)', () => {
     systemUtilsMock.stdout.isTTY = true;
     systemUtilsMock.stdout.rows = 24;
     initConfigMock.mockResolvedValue({});
+    resolveAgentFactoryMock.mockReturnValue(resolvedFactory);
     runnerInitMock.mockResolvedValue(undefined);
     runnerGetAgentMock.mockReturnValue({});
     runnerCleanupMock.mockResolvedValue(undefined);
@@ -108,6 +113,22 @@ describe('createTuiSession — launch bump (TUI-C13)', () => {
     const renderOrder = renderMock.mock.invocationCallOrder[0];
     expect(writeOrder).toBeLessThan(renderOrder);
     expect(renderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects the agent backend via resolveAgentFactory(config, "deep") — B5 (regression: TUI path)', async () => {
+    const backendConfig = { agent: { backend: 'lean' } };
+    initConfigMock.mockResolvedValue(backendConfig);
+    const { createTuiSession } = await import('#src/tui/tuiSessionModule.js');
+    const { GthAgentRunner } = await import('@gaunt-sloth/core/core/GthAgentRunner.js');
+
+    await createTuiSession(sessionConfig, overrides);
+
+    // The TUI must route through resolveAgentFactory (default 'deep' for interactive) so an
+    // explicit config.agent.backend is honored — not the hardcoded deep factory.
+    expect(resolveAgentFactoryMock).toHaveBeenCalledWith(backendConfig, 'deep');
+    // …and the resolved factory is the one handed to the runner as the 3rd ctor arg.
+    const runnerCall = (GthAgentRunner as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(runnerCall[2]).toBe(resolvedFactory);
   });
 
   it('does NOT write the bump sequence when stdout is not a TTY (piped/redirected/tests)', async () => {
